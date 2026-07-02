@@ -13,20 +13,20 @@ from app.storage import Document, Snapshot
 logger = logging.getLogger("exobrain.storage.postgres")
 
 # Lazy import — production only
-psycopg2_pool = None
+_pool = None
 
 
 def _get_pool():
     """Lazy-init psycopg2 connection pool."""
-    global psycopg2_pool
-    if psycopg2_pool is None:
+    global _pool
+    if _pool is None:
         import psycopg2
         import psycopg2.pool
-        db_url = os.getenv("DATABASE_URL", os.getenv("POSTGRES_URL", ""))
+        db_url = os.getenv("DATABASE_URL", "")
         if not db_url:
-            raise RuntimeError("DATABASE_URL or POSTGRES_URL must be set for Postgres storage")
-        psycopg2_pool = psycopg2.pool.ThreadedConnectionPool(1, 10, db_url)
-    return psycopg2_pool
+            raise RuntimeError("DATABASE_URL must be set for Postgres storage")
+        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, db_url)
+    return _pool
 
 
 class PostgresStorage:
@@ -36,7 +36,8 @@ class PostgresStorage:
         pool = _get_pool()
         conn = pool.getconn()
         try:
-            conn.execute("""
+            cur = conn.cursor()
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS exobrain_documents (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL DEFAULT 'local',
@@ -57,11 +58,9 @@ class PostgresStorage:
                 CREATE INDEX IF NOT EXISTS idx_exo_snaps_doc ON exobrain_snapshots(document_id, created_at DESC);
             """)
             conn.commit()
+            cur.close()
         finally:
             pool.putconn(conn)
-
-    def _now(self) -> str:
-        return datetime.now(timezone.utc).isoformat()
 
     def _row_to_doc(self, row: tuple) -> Document:
         id_, user_id, title, markdown, messages, created_at, updated_at = row
@@ -81,11 +80,13 @@ class PostgresStorage:
         pool = _get_pool()
         conn = pool.getconn()
         try:
-            conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 "INSERT INTO exobrain_documents (id, user_id, title, markdown, messages) VALUES (%s,%s,%s,%s,%s)",
                 (doc.id, user_id, title, "", "[]"),
             )
             conn.commit()
+            cur.close()
         finally:
             pool.putconn(conn)
         return doc
@@ -94,10 +95,13 @@ class PostgresStorage:
         pool = _get_pool()
         conn = pool.getconn()
         try:
-            rows = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 "SELECT id, user_id, title, markdown, messages, created_at, updated_at FROM exobrain_documents WHERE user_id=%s ORDER BY updated_at DESC",
                 (user_id,),
-            ).fetchall()
+            )
+            rows = cur.fetchall()
+            cur.close()
         finally:
             pool.putconn(conn)
         return [self._row_to_doc(r) for r in rows]
@@ -106,10 +110,13 @@ class PostgresStorage:
         pool = _get_pool()
         conn = pool.getconn()
         try:
-            row = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 "SELECT id, user_id, title, markdown, messages, created_at, updated_at FROM exobrain_documents WHERE id=%s",
                 (doc_id,),
-            ).fetchone()
+            )
+            row = cur.fetchone()
+            cur.close()
         finally:
             pool.putconn(conn)
         if row is None:
@@ -117,26 +124,29 @@ class PostgresStorage:
         return self._row_to_doc(row)
 
     async def update_document(self, doc_id: str, markdown: str, messages: list[dict], title: str | None = None) -> Document | None:
-        import psycopg2
         messages_json = json.dumps(messages, ensure_ascii=False)
         pool = _get_pool()
         conn = pool.getconn()
         try:
+            cur = conn.cursor()
             if title is not None:
-                conn.execute(
+                cur.execute(
                     "UPDATE exobrain_documents SET markdown=%s, messages=%s, title=%s, updated_at=NOW() WHERE id=%s",
-                    (markdown, json.dumps(messages_json), title, doc_id),
+                    (markdown, messages_json, title, doc_id),
                 )
             else:
-                conn.execute(
+                cur.execute(
                     "UPDATE exobrain_documents SET markdown=%s, messages=%s, updated_at=NOW() WHERE id=%s",
                     (markdown, messages_json, doc_id),
                 )
             conn.commit()
-            row = conn.execute(
+
+            cur.execute(
                 "SELECT id, user_id, title, markdown, messages, created_at, updated_at FROM exobrain_documents WHERE id=%s",
                 (doc_id,),
-            ).fetchone()
+            )
+            row = cur.fetchone()
+            cur.close()
         finally:
             pool.putconn(conn)
         if row is None:
@@ -147,10 +157,12 @@ class PostgresStorage:
         pool = _get_pool()
         conn = pool.getconn()
         try:
-            conn.execute("DELETE FROM exobrain_snapshots WHERE document_id=%s", (doc_id,))
-            cursor = conn.execute("DELETE FROM exobrain_documents WHERE id=%s", (doc_id,))
+            cur = conn.cursor()
+            cur.execute("DELETE FROM exobrain_snapshots WHERE document_id=%s", (doc_id,))
+            cur.execute("DELETE FROM exobrain_documents WHERE id=%s", (doc_id,))
+            deleted = cur.rowcount > 0
             conn.commit()
-            deleted = cursor.rowcount > 0
+            cur.close()
         finally:
             pool.putconn(conn)
         return deleted
@@ -163,11 +175,13 @@ class PostgresStorage:
         pool = _get_pool()
         conn = pool.getconn()
         try:
-            conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 "INSERT INTO exobrain_snapshots (id, document_id, markdown, messages) VALUES (%s,%s,%s,%s)",
                 (snap.id, doc_id, markdown, messages_json),
             )
             conn.commit()
+            cur.close()
         finally:
             pool.putconn(conn)
         return snap
@@ -176,10 +190,13 @@ class PostgresStorage:
         pool = _get_pool()
         conn = pool.getconn()
         try:
-            rows = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 "SELECT id, document_id, markdown, messages, created_at FROM exobrain_snapshots WHERE document_id=%s ORDER BY created_at DESC",
                 (doc_id,),
-            ).fetchall()
+            )
+            rows = cur.fetchall()
+            cur.close()
         finally:
             pool.putconn(conn)
         results = []
@@ -198,35 +215,44 @@ class PostgresStorage:
         pool = _get_pool()
         conn = pool.getconn()
         try:
-            snap_row = conn.execute(
+            cur = conn.cursor()
+
+            # Get snapshot
+            cur.execute(
                 "SELECT markdown, messages FROM exobrain_snapshots WHERE id=%s AND document_id=%s",
                 (snapshot_id, doc_id),
-            ).fetchone()
+            )
+            snap_row = cur.fetchone()
             if snap_row is None:
+                cur.close()
                 return None
 
             snap_markdown, snap_messages = snap_row
 
             # Save current state as snapshot first
-            current = conn.execute(
+            cur.execute(
                 "SELECT markdown, messages FROM exobrain_documents WHERE id=%s", (doc_id,),
-            ).fetchone()
+            )
+            current = cur.fetchone()
             if current:
-                conn.execute(
+                cur.execute(
                     "INSERT INTO exobrain_snapshots (id, document_id, markdown, messages) VALUES (%s,%s,%s,%s)",
                     (str(uuid.uuid4()), doc_id, current[0],
                      json.dumps(current[1]) if isinstance(current[1], (list, dict)) else str(current[1])),
                 )
 
-            conn.execute(
+            cur.execute(
                 "UPDATE exobrain_documents SET markdown=%s, messages=%s, updated_at=NOW() WHERE id=%s",
                 (snap_markdown, json.dumps(snap_messages) if isinstance(snap_messages, (list, dict)) else str(snap_messages), doc_id),
             )
             conn.commit()
-            row = conn.execute(
+
+            cur.execute(
                 "SELECT id, user_id, title, markdown, messages, created_at, updated_at FROM exobrain_documents WHERE id=%s",
                 (doc_id,),
-            ).fetchone()
+            )
+            row = cur.fetchone()
+            cur.close()
         finally:
             pool.putconn(conn)
         return self._row_to_doc(row)
