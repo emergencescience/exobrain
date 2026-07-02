@@ -11,8 +11,11 @@ services:
       - EXOBRAIN_LLM_API_KEY=${EXOBRAIN_LLM_API_KEY:-}
       - EXOBRAIN_LLM_BASE_URL=${EXOBRAIN_LLM_BASE_URL:-https://api.deepseek.com}
       - EXOBRAIN_LLM_MODEL=${EXOBRAIN_LLM_MODEL:-deepseek-chat}
-      - EXOBRAIN_RAG_INDEX=${EXOBRAIN_RAG_INDEX:-/app/rag_index.json}
+      - EXOBRAIN_RAG_INDEX=/app/data/mpc_rag.json
       - EXOBRAIN_CORS_ORIGINS=${EXOBRAIN_CORS_ORIGINS:-*}
+    volumes:
+      # Mount pre-built RAG index (build with: python build_rag_index.py)
+      - ./backend/app/data:/app/data
     restart: unless-stopped
 
   frontend:

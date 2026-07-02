@@ -47,6 +47,49 @@ All via environment variables:
 | `EXOBRAIN_RAG_TOP_K` | `3` | Number of RAG chunks to retrieve |
 | `EXOBRAIN_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
 
+## Retrieval-Augmented Generation (RAG)
+
+Exobrain ships with a **built-in MPC textbook knowledge base** (Model Predictive Control: From Foundations to Advanced Topics, CC BY-NC 4.0). When enabled, every query retrieves the most relevant textbook sections and injects them into the LLM context — dramatically reducing hallucination.
+
+### How it works
+
+```
+User asks: "What is a state-space model?"
+  → Retrieve top-3 chunks from mpc_rag.json (cosine similarity)
+  → Inject into system prompt as "REFERENCE MATERIAL"
+  → LLM answers grounded in textbook content
+```
+
+### Building the index
+
+```bash
+# One-time: clone MPC textbook and build embeddings
+cd backend
+pip install sentence-transformers
+python build_rag_index.py --clone
+
+# Output: app/data/mpc_rag.json (232 chunks, 2.6 MB)
+```
+
+The index is mounted via `docker-compose.yml`:
+```yaml
+volumes:
+  - ./backend/app/data:/app/data
+environment:
+  - EXOBRAIN_RAG_INDEX=/app/data/mpc_rag.json
+```
+
+### Using your own knowledge base
+
+Replace `mpc_rag.json` with any index built from your own LaTeX content:
+
+```python
+from app.rag.retrieve import build_index
+build_index("/path/to/your/latex/chapters", "app/data/my_rag.json")
+```
+
+Set `EXOBRAIN_RAG_INDEX=/app/data/my_rag.json` in docker-compose. Any structured LaTeX textbook works — the parser handles `\section{}`, `\subsection{}`, `\begin{equation}`, and strips formatting commands.
+
 ## API
 
 ### `POST /api/chat`
