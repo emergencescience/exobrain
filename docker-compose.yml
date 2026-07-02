@@ -1,0 +1,26 @@
+# Exobrain — AI-powered Markdown + LaTeX paper editor
+
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      - EXOBRAIN_LLM_API_KEY=${EXOBRAIN_LLM_API_KEY:-}
+      - EXOBRAIN_LLM_BASE_URL=${EXOBRAIN_LLM_BASE_URL:-https://api.deepseek.com}
+      - EXOBRAIN_LLM_MODEL=${EXOBRAIN_LLM_MODEL:-deepseek-chat}
+      - EXOBRAIN_RAG_INDEX=${EXOBRAIN_RAG_INDEX:-/app/rag_index.json}
+      - EXOBRAIN_CORS_ORIGINS=${EXOBRAIN_CORS_ORIGINS:-*}
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8080
+    depends_on:
+      - backend
+    restart: unless-stopped
