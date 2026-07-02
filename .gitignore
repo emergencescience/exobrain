@@ -4,4 +4,8 @@ node_modules/
 __pycache__/
 *.pyc
 .DS_Store
+# Ignore runtime data files except the built-in RAG index
 backend/app/data/*.json
+!backend/app/data/mpc_rag.json
+# Ignore SQLite database (runtime artifact)
+backend/app/data/*.db

@@ -1,7 +1,6 @@
-"""Exobrain backend requirements."""
-
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 httpx>=0.27.0
 sentence-transformers>=2.7.0
 numpy>=1.24.0
+psycopg2-binary>=2.9.0
