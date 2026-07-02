@@ -29,6 +29,13 @@ interface Document {
   updated_at: string;
 }
 
+interface VerifyResult {
+  line: number;
+  equation: string;
+  status: "verified" | "inconclusive" | "error";
+  detail: string;
+}
+
 // ── Built-in i18n (no external dict dependency for standalone) ───
 
 const STRINGS = {
@@ -295,6 +302,9 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
   const [commentingPara, setCommentingPara] = useState<number | null>(null);
   const [commentText, setCommentText] = useState("");
   const [mobileTab, setMobileTab] = useState<"chat" | "source" | "preview" | "verify">("chat");
+  const [verifyResults, setVerifyResults] = useState<VerifyResult[] | null>(null);
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [showVerify, setShowVerify] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // ── Settings & Project state ──────────────────────────────────
@@ -499,6 +509,29 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
     }
   };
 
+  const runVerification = async () => {
+    setVerifyLoading(true);
+    setVerifyResults(null);
+    setShowVerify(true);
+    // On mobile, switch to verify tab
+    setMobileTab("verify");
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markdown: documentMarkdown }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const results: VerifyResult[] = Array.isArray(data) ? data : data.results || [];
+      setVerifyResults(results);
+    } catch (err) {
+      setVerifyResults([]);
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
   const copyToClipboard = async () => {
     try {
       await navigator.clipboard.writeText(documentMarkdown);
@@ -567,6 +600,15 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
             }`}
           >
             {showSource ? "👁 Preview" : "📄 Source"}
+          </button>
+          <button
+            onClick={runVerification}
+            disabled={verifyLoading}
+            className={`px-3 py-1 text-xs rounded border transition-colors ${
+              showVerify ? "border-cyan-400/50 text-cyan-300 bg-cyan-500/10" : "border-white/20 hover:border-cyan-400/50 hover:text-cyan-300"
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            {verifyLoading ? "⏳ Verifying..." : "🔬 Verify"}
           </button>
           <button onClick={copyToClipboard} className="px-3 py-1 text-xs rounded border border-white/20 hover:border-purple-400/50 hover:text-purple-300 transition-colors">
             {dict.copy_btn}
@@ -704,14 +746,77 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
                 </div>
               </div>
             )}
-            {/* Mobile Verify Panel (SymPy — coming soon) */}
+            {/* Mobile Verify Panel (SymPy) */}
             {mobileTab === "verify" && (
-              <div className="h-full flex items-center justify-center">
-                <div className="text-center text-white/30 p-6">
-                  <p className="text-4xl mb-3">🔬</p>
-                  <p className="text-sm">Formal verification coming soon.</p>
-                  <p className="text-xs mt-1 text-white/20">SymPy &bull; Lean 4</p>
-                </div>
+              <div className="h-full overflow-y-auto p-3">
+                {verifyLoading ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center text-white/50">
+                      <span className="inline-flex gap-1 text-lg">
+                        <span className="animate-bounce">●</span>
+                        <span className="animate-bounce" style={{animationDelay:"0.1s"}}>●</span>
+                        <span className="animate-bounce" style={{animationDelay:"0.2s"}}>●</span>
+                      </span>
+                      <p className="text-xs mt-2">Verifying equations with SymPy...</p>
+                    </div>
+                  </div>
+                ) : verifyResults === null ? (
+                  <div className="h-full flex items-center justify-center">
+                    <div className="text-center text-white/30 p-6">
+                      <p className="text-4xl mb-3">🔬</p>
+                      <p className="text-sm">Tap "🔬 Verify" above to check equations.</p>
+                      <p className="text-xs mt-1 text-white/20">SymPy verification</p>
+                    </div>
+                  </div>
+                ) : verifyResults.length === 0 ? (
+                  <div className="h-full flex items-center justify-center">
+                    <div className="text-center text-white/40 p-6">
+                      <p className="text-3xl mb-3">⚠️</p>
+                      <p className="text-sm">No equations found or verification failed.</p>
+                      <p className="text-xs mt-1 text-white/20">Try adding LaTeX equations to your document.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 mb-3">
+                      <p className="text-xs text-white/50">
+                        {verifyResults.filter(r => r.status === "verified").length} ✓ verified,
+                        {" "}{verifyResults.filter(r => r.status === "inconclusive").length} ⚠ inconclusive,
+                        {" "}{verifyResults.filter(r => r.status === "error").length} ✗ errors
+                      </p>
+                    </div>
+                    {verifyResults.map((result, i) => {
+                      const statusIcon = result.status === "verified" ? "✅"
+                        : result.status === "inconclusive" ? "⚠️" : "❌";
+                      const statusColor = result.status === "verified" ? "border-green-500/30 bg-green-500/5"
+                        : result.status === "inconclusive" ? "border-yellow-500/30 bg-yellow-500/5"
+                        : "border-red-500/30 bg-red-500/5";
+                      const textColor = result.status === "verified" ? "text-green-400"
+                        : result.status === "inconclusive" ? "text-yellow-400" : "text-red-400";
+                      return (
+                        <div key={i} className={`rounded-lg border p-3 ${statusColor}`}>
+                          <div className="flex items-start gap-2">
+                            <span className="text-sm shrink-0 mt-0.5">{statusIcon}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-[10px] text-white/30 font-mono">L{result.line}</span>
+                                <span className={`text-[10px] font-medium uppercase ${textColor}`}>
+                                  {result.status}
+                                </span>
+                              </div>
+                              <div className="text-xs text-white/70 font-mono bg-black/20 rounded px-2 py-1 overflow-x-auto whitespace-nowrap">
+                                {result.equation}
+                              </div>
+                              {result.detail && (
+                                <p className="text-[10px] text-white/40 mt-1 italic">{result.detail}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -787,7 +892,85 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
         <div className="hidden md:flex w-[55%] flex-col bg-[#0a0a0a]">
           <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-2xl mx-auto">
-              {showSource ? (
+              {showVerify ? (
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-semibold text-cyan-400">🔬 SymPy Verification</h3>
+                    <button
+                      onClick={() => setShowVerify(false)}
+                      className="px-2 py-0.5 text-[10px] rounded border border-white/20 text-white/50 hover:text-white/80 hover:border-white/40 transition-colors"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
+                  {verifyLoading ? (
+                    <div className="flex items-center justify-center py-16">
+                      <div className="text-center text-white/50">
+                        <span className="inline-flex gap-1 text-lg">
+                          <span className="animate-bounce">●</span>
+                          <span className="animate-bounce" style={{animationDelay:"0.1s"}}>●</span>
+                          <span className="animate-bounce" style={{animationDelay:"0.2s"}}>●</span>
+                        </span>
+                        <p className="text-xs mt-2">Verifying equations with SymPy...</p>
+                      </div>
+                    </div>
+                  ) : verifyResults === null ? (
+                    <div className="flex items-center justify-center py-16">
+                      <div className="text-center text-white/30">
+                        <p className="text-4xl mb-3">🔬</p>
+                        <p className="text-sm">Click "🔬 Verify" above to check all equations.</p>
+                        <p className="text-xs mt-1 text-white/20">SymPy verification</p>
+                      </div>
+                    </div>
+                  ) : verifyResults.length === 0 ? (
+                    <div className="flex items-center justify-center py-16">
+                      <div className="text-center text-white/40">
+                        <p className="text-3xl mb-3">⚠️</p>
+                        <p className="text-sm">No equations found or verification failed.</p>
+                        <p className="text-xs mt-1 text-white/20">Try adding LaTeX equations to your document.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3 mb-3 px-1">
+                        <span className="text-xs text-green-400">✓ {verifyResults.filter(r => r.status === "verified").length}</span>
+                        <span className="text-xs text-yellow-400">⚠ {verifyResults.filter(r => r.status === "inconclusive").length}</span>
+                        <span className="text-xs text-red-400">✗ {verifyResults.filter(r => r.status === "error").length}</span>
+                      </div>
+                      {verifyResults.map((result, i) => {
+                        const statusIcon = result.status === "verified" ? "✅"
+                          : result.status === "inconclusive" ? "⚠️" : "❌";
+                        const statusColor = result.status === "verified" ? "border-green-500/30 bg-green-500/5"
+                          : result.status === "inconclusive" ? "border-yellow-500/30 bg-yellow-500/5"
+                          : "border-red-500/30 bg-red-500/5";
+                        const textColor = result.status === "verified" ? "text-green-400"
+                          : result.status === "inconclusive" ? "text-yellow-400" : "text-red-400";
+                        return (
+                          <div key={i} className={`rounded-lg border p-3 ${statusColor}`}>
+                            <div className="flex items-start gap-3">
+                              <span className="text-base shrink-0 mt-0.5">{statusIcon}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-3 mb-1.5">
+                                  <span className="text-[10px] text-white/30 font-mono">Line {result.line}</span>
+                                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${textColor}`}>
+                                    {result.status}
+                                  </span>
+                                </div>
+                                <div className="text-sm text-white/70 font-mono bg-black/30 rounded px-3 py-1.5 overflow-x-auto whitespace-nowrap">
+                                  {result.equation}
+                                </div>
+                                {result.detail && (
+                                  <p className="text-[11px] text-white/40 mt-1.5 italic">{result.detail}</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ) : showSource ? (
                 <pre className="text-xs text-white/60 font-mono whitespace-pre-wrap leading-relaxed bg-white/[0.02] rounded p-4 border border-white/5">
                   {documentMarkdown}
                 </pre>
