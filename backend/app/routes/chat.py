@@ -181,6 +181,7 @@ async def chat(request: Request):
         comments: dict | None (inline comments)
         suggestion_id: str | None (pre-canned response ID)
         enable_rag: bool (default True if RAG index available)
+        doc_id: str | None (document ID for persistence — auto-saves snapshots)
     """
     try:
         body = await request.json()
@@ -196,6 +197,7 @@ async def chat(request: Request):
     comments = body.get("comments")
     suggestion_id = body.get("suggestion_id")
     enable_rag = body.get("enable_rag", True)
+    doc_id = body.get("doc_id")
 
     # ── Pre-canned suggestion? Return immediately ──
     if suggestion_id:
@@ -279,6 +281,25 @@ async def chat(request: Request):
 
     elapsed = round(time.monotonic() - t0, 2)
 
+    # ── Auto-save snapshot if doc_id provided ──
+    snapshot_id = None
+    if doc_id:
+        try:
+            from app.storage import get_storage
+            storage = await get_storage()
+            # Save current state as snapshot before update
+            snap = await storage.save_snapshot(doc_id, document or "", list(messages))
+            snapshot_id = snap.id
+            # Update document with latest markdown + messages
+            updated_doc = body.get("document")  # frontend passes updated document
+            await storage.update_document(
+                doc_id,
+                updated_doc or "",
+                list(messages),
+            )
+        except Exception:
+            logger.exception("Failed to save snapshot for doc %s", doc_id)
+
     return {
         "reply": reply,
         "model": model,
@@ -288,4 +309,5 @@ async def chat(request: Request):
             "total_tokens": usage.get("total_tokens", 0),
         },
         "elapsed_s": elapsed,
+        "snapshot_id": snapshot_id,
     }

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import config
 from app.routes.chat import router as chat_router
+from app.routes.documents import router as documents_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("exobrain")
@@ -28,6 +29,7 @@ app.add_middleware(
 
 # Routes
 app.include_router(chat_router)
+app.include_router(documents_router)
 
 
 @app.get("/health")
