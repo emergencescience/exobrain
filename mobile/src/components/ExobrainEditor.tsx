@@ -81,7 +81,7 @@ type Tab = "chat" | "preview";
 export default function ExobrainEditor({ onSettings }: Props) {
   const cfgRef = useRef<AppConfig>(loadConfig());
   const isMobile = useIsMobile();
-  const [activeTab, setActiveTab] = useState<Tab>("preview");
+  const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [state, _setState] = useState<ExobrainState>(() => {
     try {
       const raw = localStorage.getItem("exobrain_edit_state");
@@ -331,19 +331,6 @@ export default function ExobrainEditor({ onSettings }: Props) {
       background: "rgba(0,0,0,0.95)", flexShrink: 0,
     }}>
       <button
-        onClick={() => setActiveTab("preview")}
-        style={{
-          flex: 1, padding: "10px 0", border: "none",
-          background: activeTab === "preview" ? "rgba(255,255,255,0.05)" : "transparent",
-          color: activeTab === "preview" ? "#e0e0e0" : "#666",
-          fontSize: 13, fontWeight: activeTab === "preview" ? "bold" : "normal",
-          borderBottom: activeTab === "preview" ? "2px solid #a855f7" : "2px solid transparent",
-          cursor: "pointer",
-        }}
-      >
-        📄 Document
-      </button>
-      <button
         onClick={() => setActiveTab("chat")}
         style={{
           flex: 1, padding: "10px 0", border: "none",
@@ -363,6 +350,19 @@ export default function ExobrainEditor({ onSettings }: Props) {
             {messages.length}
           </span>
         )}
+      </button>
+      <button
+        onClick={() => setActiveTab("preview")}
+        style={{
+          flex: 1, padding: "10px 0", border: "none",
+          background: activeTab === "preview" ? "rgba(255,255,255,0.05)" : "transparent",
+          color: activeTab === "preview" ? "#e0e0e0" : "#666",
+          fontSize: 13, fontWeight: activeTab === "preview" ? "bold" : "normal",
+          borderBottom: activeTab === "preview" ? "2px solid #a855f7" : "2px solid transparent",
+          cursor: "pointer",
+        }}
+      >
+        📄 Document
       </button>
     </div>
   );
