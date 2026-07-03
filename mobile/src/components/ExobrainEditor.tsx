@@ -92,7 +92,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showSource, setShowSource] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const setState = useCallback((v: ExobrainState | ((p: ExobrainState) => ExobrainState)) => {
     _setState((prev) => {
@@ -104,7 +104,11 @@ export default function ExobrainEditor({ onSettings }: Props) {
 
   const { messages, documentMarkdown, comments } = state;
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  // Auto-scroll to bottom — use scrollTop to avoid mobile scrollIntoView issues
+  useEffect(() => {
+    const el = chatContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
 
   // Switch to chat when user sends a message on mobile
   const switchToChat = useCallback(() => { if (isMobile) setActiveTab("chat"); }, [isMobile]);
@@ -170,10 +174,12 @@ export default function ExobrainEditor({ onSettings }: Props) {
     padding: "8px 12px", paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
     borderBottom: "1px solid rgba(255,255,255,0.1)",
     background: "var(--header-bg)", flexShrink: 0,
+    position: "sticky", top: 0, zIndex: 10,
   };
 
   const containerStyle: React.CSSProperties = {
-    height: "100dvh", display: "flex", flexDirection: "column",
+    position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+    display: "flex", flexDirection: "column",
     background: "var(--bg)", color: "var(--fg)",
   };
 
@@ -188,7 +194,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
       borderRight: isMobile ? undefined : "1px solid rgba(255,255,255,0.1)",
       overflow: "hidden",
     }}>
-      <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
+      <div ref={chatContainerRef} style={{ flex: 1, overflow: "auto", padding: 12, overscrollBehavior: "contain" }}>
         {messages.length === 0 && (
           <div style={{ textAlign: "center", color: "var(--fg-dim)", marginTop: isMobile ? "20%" : "40%" }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>🧠</div>
@@ -257,7 +263,6 @@ export default function ExobrainEditor({ onSettings }: Props) {
         {loading && (
           <div style={{ textAlign: "center", color: "var(--fg-dim)", fontSize: 20 }}>●●●</div>
         )}
-        <div ref={chatEndRef} />
       </div>
 
       {/* Input */}
