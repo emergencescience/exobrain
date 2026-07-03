@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app/ ./app/
 
+# Copy pre-built mobile web app (for /m/ static serving)
+COPY mobile/dist/ ./mobile/dist/
+
 # Ensure data dir exists
 RUN mkdir -p app/data
 
