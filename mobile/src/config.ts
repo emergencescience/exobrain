@@ -11,6 +11,8 @@ export interface AppConfig {
   baseUrl: string;
   /** Model name */
   model: string;
+  /** Theme: dark or light */
+  theme: "dark" | "light";
   /** Whether setup is complete */
   setupDone: boolean;
 }
@@ -20,6 +22,7 @@ const DEFAULTS: AppConfig = {
   apiKey: "",
   baseUrl: "https://api.deepseek.com",
   model: "deepseek-chat",
+  theme: "dark",
   setupDone: false,
 };
 

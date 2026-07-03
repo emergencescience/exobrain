@@ -147,11 +147,42 @@ export default function ApiKeySettings({ onComplete }: Props) {
             <p style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
               Features: SymPy verification, RAG, cloud storage, credits tracking.
             </p>
-            <p style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
-              Login happens in-browser on first use.
-            </p>
           </div>
         )}
+
+        {/* Theme selector */}
+        <label style={{ fontSize: 12, color: "#888", marginBottom: 4, display: "block" }}>
+          Theme
+        </label>
+        <div style={{
+          display: "flex", borderRadius: 12, overflow: "hidden",
+          border: "1px solid #333", marginBottom: 20,
+        }}>
+          <button
+            onClick={() => setCfg({ ...cfg, theme: "dark" })}
+            style={{
+              flex: 1, padding: "10px 0", border: "none",
+              background: cfg.theme === "dark" ? "#a855f720" : "transparent",
+              color: cfg.theme === "dark" ? "#a855f7" : "#666",
+              fontSize: 13, fontWeight: cfg.theme === "dark" ? "bold" : "normal",
+              cursor: "pointer",
+            }}
+          >
+            🌙 Dark
+          </button>
+          <button
+            onClick={() => setCfg({ ...cfg, theme: "light" })}
+            style={{
+              flex: 1, padding: "10px 0", border: "none",
+              background: cfg.theme === "light" ? "#f59e0b20" : "transparent",
+              color: cfg.theme === "light" ? "#f59e0b" : "#666",
+              fontSize: 13, fontWeight: cfg.theme === "light" ? "bold" : "normal",
+              cursor: "pointer",
+            }}
+          >
+            ☀️ Light
+          </button>
+        </div>
 
         {/* Save button */}
         <button

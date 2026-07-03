@@ -169,12 +169,12 @@ export default function ExobrainEditor({ onSettings }: Props) {
     display: "flex", alignItems: "center", justifyContent: "space-between",
     padding: "8px 12px", paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
     borderBottom: "1px solid rgba(255,255,255,0.1)",
-    background: "rgba(0,0,0,0.9)", flexShrink: 0,
+    background: "var(--header-bg)", flexShrink: 0,
   };
 
   const containerStyle: React.CSSProperties = {
     height: "100dvh", display: "flex", flexDirection: "column",
-    background: "#000", color: "#e0e0e0",
+    background: "var(--bg)", color: "var(--fg)",
   };
 
   // ── Chat panel (shared) ────────────────────────────────────────────
@@ -240,8 +240,8 @@ export default function ExobrainEditor({ onSettings }: Props) {
           }}>
             <div style={{
               maxWidth: "90%", padding: "8px 12px", borderRadius: 12,
-              background: m.role === "user" ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.05)",
-              border: m.role === "user" ? "1px solid rgba(168,85,247,0.3)" : "1px solid rgba(255,255,255,0.1)",
+              background: m.role === "user" ? "var(--chat-user-bg)" : "var(--chat-ai-bg)",
+              border: m.role === "user" ? "1px solid var(--accent-purple)" : "1px solid var(--border)",
               fontSize: 13, lineHeight: 1.5,
             }}>
               {m.role === "assistant" ? (
@@ -271,7 +271,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
             disabled={loading}
             style={{
               flex: 1, padding: "10px 12px", borderRadius: 10,
-              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.15)",
+              background: "var(--input-bg)", border: "1px solid var(--border-hover)",
               color: "#e0e0e0", fontSize: 14, outline: "none",
             }}
           />
@@ -280,7 +280,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
             disabled={loading || !input.trim()}
             style={{
               padding: "10px 16px", borderRadius: 10, border: "none",
-              background: (loading || !input.trim()) ? "#333" : "linear-gradient(135deg, #a855f7, #06b6d4)",
+              background: (loading || !input.trim()) ? "var(--btn-disabled)" : "linear-gradient(135deg, #a855f7, #06b6d4)",
               color: "#fff", fontSize: 14, fontWeight: "bold",
               opacity: (loading || !input.trim()) ? 0.4 : 1,
             }}
@@ -298,7 +298,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
     <div style={{
       flex: isMobile ? 1 : undefined,
       width: isMobile ? undefined : "60%",
-      overflow: "auto", background: "#0a0a0a", padding: 16,
+      overflow: "auto", background: "var(--bg-secondary)", padding: 16,
       paddingBottom: isMobile ? "max(16px, env(safe-area-inset-bottom, 0px))" : 16,
     }}>
       {showSource ? (
@@ -328,7 +328,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
   const mobileTabs = (
     <div style={{
       display: "flex", borderBottom: "1px solid rgba(255,255,255,0.1)",
-      background: "rgba(0,0,0,0.95)", flexShrink: 0,
+      background: "var(--tab-bg)", flexShrink: 0,
     }}>
       <button
         onClick={() => setActiveTab("chat")}
