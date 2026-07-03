@@ -2,8 +2,11 @@
 
 import logging
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.config import config
 from app.routes.chat import router as chat_router
@@ -33,6 +36,12 @@ app.include_router(chat_router)
 app.include_router(documents_router)
 app.include_router(verify_router)
 
+
+# Static files — mobile web app served at /m/
+MOBILE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "mobile", "dist")
+if os.path.isdir(MOBILE_DIR):
+    app.mount("/m", StaticFiles(directory=MOBILE_DIR, html=True), name="mobile")
+    logger.info(f"Mobile app mounted at /m/ from {MOBILE_DIR}")
 
 @app.get("/health")
 async def health():
