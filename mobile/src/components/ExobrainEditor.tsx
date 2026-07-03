@@ -190,9 +190,47 @@ export default function ExobrainEditor({ onSettings }: Props) {
     }}>
       <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
         {messages.length === 0 && (
-          <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", marginTop: "40%" }}>
+          <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", marginTop: isMobile ? "20%" : "40%" }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>🧠</div>
-            <p style={{ fontSize: 14 }}>Chat with AI to build your paper</p>
+            <p style={{ fontSize: 14, marginBottom: 16 }}>Chat with AI to build your paper</p>
+            <div style={{
+              display: "flex", flexDirection: "column", gap: 8,
+              maxWidth: 300, margin: "0 auto",
+            }}>
+              {[
+                "Write an introduction for Riemann zeta function",
+                "Derive the quadratic formula step by step",
+                "Explain the Central Limit Theorem",
+                "Prove the Pythagorean theorem",
+              ].map((hint) => (
+                <button
+                  key={hint}
+                  onClick={() => {
+                    setInput(hint);
+                    // Focus the input
+                    const inp = document.querySelector('input[placeholder=\"Describe your paper...\"]') as HTMLInputElement;
+                    if (inp) inp.focus();
+                  }}
+                  style={{
+                    textAlign: "left", padding: "10px 14px", borderRadius: 10,
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    background: "rgba(255,255,255,0.03)",
+                    color: "rgba(255,255,255,0.45)", fontSize: 12, cursor: "pointer",
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "rgba(168,85,247,0.3)";
+                    e.currentTarget.style.color = "rgba(255,255,255,0.7)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
+                    e.currentTarget.style.color = "rgba(255,255,255,0.45)";
+                  }}
+                >
+                  {hint}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {messages.map((m, i) => (
@@ -337,11 +375,16 @@ export default function ExobrainEditor({ onSettings }: Props) {
       <div style={headerStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{
-            fontSize: 16, fontWeight: "bold",
-            background: "linear-gradient(135deg, #a855f7, #06b6d4)",
-            WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+            display: "flex", alignItems: "center", gap: 8,
           }}>
-            Exobrain
+            <img src="./icon-192.png" alt="Exobrain" style={{ width: 24, height: 24, borderRadius: 4 }} />
+            <span style={{
+              fontSize: 16, fontWeight: "bold",
+              background: "linear-gradient(135deg, #a855f7, #06b6d4)",
+              WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+            }}>
+              Exobrain
+            </span>
           </span>
           <span style={{ fontSize: 10, color: "#555" }}>
             {cfgRef.current.mode === "self" ? "🔑" : "☁️"}
