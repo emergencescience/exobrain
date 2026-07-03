@@ -66,14 +66,14 @@ interface Props {
 }
 
 const MARKDOWN_COMPONENTS: Record<string, React.ComponentType<any>> = {
-  p: ({ children }: any) => <p style={{ margin: "4px 0", fontSize: 13, color: "rgba(255,255,255,0.8)" }}>{children}</p>,
+  p: ({ children }: any) => <p style={{ margin: "4px 0", fontSize: 13, color: "var(--fg)" }}>{children}</p>,
   h1: ({ children }: any) => <h1 style={{ fontSize: 18, fontWeight: "bold", color: "rgba(255,255,255,0.9)", margin: "12px 0 6px" }}>{children}</h1>,
   h2: ({ children }: any) => <h2 style={{ fontSize: 16, fontWeight: "bold", color: "rgba(255,255,255,0.85)", margin: "10px 0 4px" }}>{children}</h2>,
-  h3: ({ children }: any) => <h3 style={{ fontSize: 14, fontWeight: 600, color: "rgba(255,255,255,0.7)", margin: "8px 0 2px" }}>{children}</h3>,
+  h3: ({ children }: any) => <h3 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-secondary)", margin: "8px 0 2px" }}>{children}</h3>,
   code: ({ children, className }: any) => !className
-    ? <code style={{ background: "rgba(255,255,255,0.1)", padding: "2px 4px", borderRadius: 3, fontSize: 12, color: "#22d3ee" }}>{children}</code>
-    : <pre style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: 8, overflow: "auto", margin: "6px 0" }}><code style={{ fontSize: 11, color: "#22d3ee" }}>{children}</code></pre>,
-  blockquote: ({ children }: any) => <blockquote style={{ borderLeft: "2px solid rgba(168,85,247,0.5)", paddingLeft: 10, margin: "4px 0", fontSize: 12, color: "rgba(255,255,255,0.5)", fontStyle: "italic" }}>{children}</blockquote>,
+    ? <code style={{ background: "var(--comment-bg)", padding: "2px 4px", borderRadius: 3, fontSize: 12, color: "var(--fg-link)" }}>{children}</code>
+    : <pre style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: 8, overflow: "auto", margin: "6px 0" }}><code style={{ fontSize: 11, color: "var(--fg-link)" }}>{children}</code></pre>,
+  blockquote: ({ children }: any) => <blockquote style={{ borderLeft: "2px solid rgba(168,85,247,0.5)", paddingLeft: 10, margin: "4px 0", fontSize: 12, color: "var(--btn-text)", fontStyle: "italic" }}>{children}</blockquote>,
 };
 
 type Tab = "chat" | "preview";
@@ -190,7 +190,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
     }}>
       <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
         {messages.length === 0 && (
-          <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", marginTop: isMobile ? "20%" : "40%" }}>
+          <div style={{ textAlign: "center", color: "var(--fg-dim)", marginTop: isMobile ? "20%" : "40%" }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>🧠</div>
             <p style={{ fontSize: 14, marginBottom: 16 }}>Chat with AI to build your paper</p>
             <div style={{
@@ -214,17 +214,17 @@ export default function ExobrainEditor({ onSettings }: Props) {
                   style={{
                     textAlign: "left", padding: "10px 14px", borderRadius: 10,
                     border: "1px solid rgba(255,255,255,0.1)",
-                    background: "rgba(255,255,255,0.03)",
-                    color: "rgba(255,255,255,0.45)", fontSize: 12, cursor: "pointer",
+                    background: "var(--suggestion-bg)",
+                    color: "var(--fg-muted)", fontSize: 12, cursor: "pointer",
                     transition: "all 0.15s",
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.borderColor = "rgba(168,85,247,0.3)";
-                    e.currentTarget.style.color = "rgba(255,255,255,0.7)";
+                    e.currentTarget.style.color = "var(--fg-secondary)";
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
-                    e.currentTarget.style.color = "rgba(255,255,255,0.45)";
+                    e.currentTarget.style.color = "var(--fg-muted)";
                   }}
                 >
                   {hint}
@@ -255,7 +255,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
           </div>
         ))}
         {loading && (
-          <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 20 }}>●●●</div>
+          <div style={{ textAlign: "center", color: "var(--fg-dim)", fontSize: 20 }}>●●●</div>
         )}
         <div ref={chatEndRef} />
       </div>
@@ -302,7 +302,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
       paddingBottom: isMobile ? "max(16px, env(safe-area-inset-bottom, 0px))" : 16,
     }}>
       {showSource ? (
-        <pre style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", whiteSpace: "pre-wrap", fontFamily: "monospace" }}>
+        <pre style={{ fontSize: 11, color: "var(--btn-text)", whiteSpace: "pre-wrap", fontFamily: "monospace" }}>
           {documentMarkdown}
         </pre>
       ) : (
@@ -386,7 +386,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
               Exobrain
             </span>
           </span>
-          <span style={{ fontSize: 10, color: "#555" }}>
+          <span style={{ fontSize: 10, color: "var(--fg-tertiary)" }}>
             {cfgRef.current.mode === "self" ? "🔑" : "☁️"}
           </span>
         </div>

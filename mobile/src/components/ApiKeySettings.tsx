@@ -20,7 +20,7 @@ export default function ApiKeySettings({ onComplete }: Props) {
 
   return (
     <div style={{
-      minHeight: "100dvh", background: "#0a0a0a", color: "#e0e0e0",
+      minHeight: "100dvh", background: "var(--bg-secondary)", color: "var(--fg)",
       paddingTop: "max(24px, env(safe-area-inset-top, 0px))",
       display: "flex", flexDirection: "column", alignItems: "center",
       justifyContent: "center", padding: 24, fontFamily: "system-ui, sans-serif",
@@ -37,7 +37,7 @@ export default function ApiKeySettings({ onComplete }: Props) {
           }}>
             Exobrain
           </h1>
-          <p style={{ fontSize: 14, color: "#666" }}>
+          <p style={{ fontSize: 14, color: "var(--fg-tertiary)" }}>
             AI-powered mathematical paper editor
           </p>
         </div>
@@ -45,14 +45,14 @@ export default function ApiKeySettings({ onComplete }: Props) {
         {/* Mode selector */}
         <div style={{
           display: "flex", borderRadius: 12, overflow: "hidden",
-          border: "1px solid #333", marginBottom: 20,
+          border: "1px solid var(--border-hover)", marginBottom: 20,
         }}>
           <button
             onClick={() => setCfg({ ...cfg, mode: "self" })}
             style={{
               flex: 1, padding: "10px 0", border: "none",
               background: cfg.mode === "self" ? "#a855f720" : "transparent",
-              color: cfg.mode === "self" ? "#a855f7" : "#666",
+              color: cfg.mode === "self" ? "#a855f7" : "var(--fg-tertiary)",
               fontSize: 13, fontWeight: cfg.mode === "self" ? "bold" : "normal",
               cursor: "pointer",
             }}
@@ -64,7 +64,7 @@ export default function ApiKeySettings({ onComplete }: Props) {
             style={{
               flex: 1, padding: "10px 0", border: "none",
               background: cfg.mode === "saas" ? "#06b6d420" : "transparent",
-              color: cfg.mode === "saas" ? "#06b6d4" : "#666",
+              color: cfg.mode === "saas" ? "#06b6d4" : "var(--fg-tertiary)",
               fontSize: 13, fontWeight: cfg.mode === "saas" ? "bold" : "normal",
               cursor: "pointer",
             }}
@@ -76,7 +76,7 @@ export default function ApiKeySettings({ onComplete }: Props) {
         {/* Self-hosted settings */}
         {cfg.mode === "self" && (
           <>
-            <label style={{ fontSize: 12, color: "#888", marginBottom: 4, display: "block" }}>
+            <label style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 4, display: "block" }}>
               DeepSeek API Key
             </label>
             <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -87,15 +87,15 @@ export default function ApiKeySettings({ onComplete }: Props) {
                 placeholder="sk-..."
                 style={{
                   flex: 1, padding: "10px 12px", borderRadius: 8,
-                  background: "#1a1a1a", border: "1px solid #333",
-                  color: "#e0e0e0", fontSize: 14, outline: "none",
+                  background: "var(--bg-tertiary)", border: "1px solid var(--border-hover)",
+                  color: "var(--fg)", fontSize: 14, outline: "none",
                 }}
               />
               <button
                 onClick={() => setShowKey(!showKey)}
                 style={{
-                  padding: "10px", borderRadius: 8, border: "1px solid #333",
-                  background: "#1a1a1a", color: "#888", cursor: "pointer",
+                  padding: "10px", borderRadius: 8, border: "1px solid var(--border-hover)",
+                  background: "var(--bg-tertiary)", color: "var(--fg-secondary)", cursor: "pointer",
                   fontSize: 16,
                 }}
               >
@@ -103,7 +103,7 @@ export default function ApiKeySettings({ onComplete }: Props) {
               </button>
             </div>
 
-            <label style={{ fontSize: 12, color: "#888", marginBottom: 4, display: "block" }}>
+            <label style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 4, display: "block" }}>
               API Base URL
             </label>
             <input
@@ -112,58 +112,94 @@ export default function ApiKeySettings({ onComplete }: Props) {
               placeholder="https://api.deepseek.com"
               style={{
                 width: "100%", padding: "10px 12px", borderRadius: 8,
-                background: "#1a1a1a", border: "1px solid #333",
-                color: "#e0e0e0", fontSize: 14, outline: "none", marginBottom: 16,
+                background: "var(--bg-tertiary)", border: "1px solid var(--border-hover)",
+                color: "var(--fg)", fontSize: 14, outline: "none", marginBottom: 16,
               }}
             />
 
-            <label style={{ fontSize: 12, color: "#888", marginBottom: 4, display: "block" }}>
+            <label style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 4, display: "block" }}>
               Model
             </label>
             <input
               value={cfg.model}
               onChange={(e) => setCfg({ ...cfg, model: e.target.value })}
-              placeholder="deepseek-chat"
+              placeholder="deepseek-v4-flash"
               style={{
                 width: "100%", padding: "10px 12px", borderRadius: 8,
-                background: "#1a1a1a", border: "1px solid #333",
-                color: "#e0e0e0", fontSize: 14, outline: "none", marginBottom: 16,
+                background: "var(--bg-tertiary)", border: "1px solid var(--border-hover)",
+                color: "var(--fg)", fontSize: 14, outline: "none", marginBottom: 16,
               }}
             />
           </>
         )}
 
-        {/* SaaS info */}
+        {/* SaaS settings */}
         {cfg.mode === "saas" && (
-          <div style={{
-            padding: 16, borderRadius: 8, background: "#06b6d410",
-            border: "1px solid #06b6d420", marginBottom: 20, fontSize: 13,
-            color: "#888", lineHeight: 1.6,
-          }}>
-            <p style={{ marginBottom: 8, color: "#06b6d4", fontWeight: "bold" }}>
-              ☁️ Emergence SaaS Mode
+          <>
+            <div style={{
+              padding: 16, borderRadius: 8, background: "#06b6d410",
+              border: "1px solid #06b6d420", marginBottom: 16, fontSize: 13,
+              color: "var(--fg-secondary)", lineHeight: 1.6,
+            }}>
+              <p style={{ marginBottom: 8, color: "#06b6d4", fontWeight: "bold" }}>
+                ☁️ Emergence SaaS Mode
+              </p>
+              <p>Connects to api.emergence.science using your Emergence API key.</p>
+              <p style={{ marginTop: 8, fontSize: 12, color: "var(--fg-tertiary)" }}>
+                Features: SymPy verification, RAG, cloud storage, credits tracking.
+              </p>
+            </div>
+
+            <label style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 4, display: "block" }}>
+              Emergence API Key
+            </label>
+            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <input
+                type={showKey ? "text" : "password"}
+                value={cfg.emergenceApiKey}
+                onChange={(e) => setCfg({ ...cfg, emergenceApiKey: e.target.value })}
+                placeholder="sk-surp-..."
+                style={{
+                  flex: 1, padding: "10px 12px", borderRadius: 8,
+                  background: "var(--bg-tertiary)", border: "1px solid var(--border-hover)",
+                  color: "var(--fg)", fontSize: 14, outline: "none",
+                }}
+              />
+            </div>
+            <p style={{ fontSize: 11, color: "var(--fg-tertiary)", marginTop: -8, marginBottom: 16 }}>
+              Get your key at emergence.science/profile
             </p>
-            <p>Connects to api.emergence.science using your Emergence account.</p>
-            <p style={{ marginTop: 8, fontSize: 12, color: "#666" }}>
-              Features: SymPy verification, RAG, cloud storage, credits tracking.
-            </p>
-          </div>
+
+            <label style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 4, display: "block" }}>
+              Model
+            </label>
+            <input
+              value={cfg.model}
+              onChange={(e) => setCfg({ ...cfg, model: e.target.value })}
+              placeholder="deepseek-v4-flash"
+              style={{
+                width: "100%", padding: "10px 12px", borderRadius: 8,
+                background: "var(--bg-tertiary)", border: "1px solid var(--border-hover)",
+                color: "var(--fg)", fontSize: 14, outline: "none", marginBottom: 16,
+              }}
+            />
+          </>
         )}
 
         {/* Theme selector */}
-        <label style={{ fontSize: 12, color: "#888", marginBottom: 4, display: "block" }}>
+        <label style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 4, display: "block" }}>
           Theme
         </label>
         <div style={{
           display: "flex", borderRadius: 12, overflow: "hidden",
-          border: "1px solid #333", marginBottom: 20,
+          border: "1px solid var(--border-hover)", marginBottom: 20,
         }}>
           <button
             onClick={() => setCfg({ ...cfg, theme: "dark" })}
             style={{
               flex: 1, padding: "10px 0", border: "none",
               background: cfg.theme === "dark" ? "#a855f720" : "transparent",
-              color: cfg.theme === "dark" ? "#a855f7" : "#666",
+              color: cfg.theme === "dark" ? "#a855f7" : "var(--fg-tertiary)",
               fontSize: 13, fontWeight: cfg.theme === "dark" ? "bold" : "normal",
               cursor: "pointer",
             }}
@@ -175,7 +211,7 @@ export default function ApiKeySettings({ onComplete }: Props) {
             style={{
               flex: 1, padding: "10px 0", border: "none",
               background: cfg.theme === "light" ? "#f59e0b20" : "transparent",
-              color: cfg.theme === "light" ? "#f59e0b" : "#666",
+              color: cfg.theme === "light" ? "#f59e0b" : "var(--fg-tertiary)",
               fontSize: 13, fontWeight: cfg.theme === "light" ? "bold" : "normal",
               cursor: "pointer",
             }}
@@ -191,7 +227,7 @@ export default function ApiKeySettings({ onComplete }: Props) {
           style={{
             width: "100%", padding: "14px", borderRadius: 12, border: "none",
             background: (cfg.mode === "self" && !cfg.apiKey.trim())
-              ? "#333"
+              ? "var(--btn-disabled)"
               : "linear-gradient(135deg, #a855f7, #06b6d4)",
             color: "#fff", fontSize: 16, fontWeight: "bold",
             cursor: (cfg.mode === "self" && !cfg.apiKey.trim()) ? "not-allowed" : "pointer",
@@ -202,7 +238,7 @@ export default function ApiKeySettings({ onComplete }: Props) {
           {cfg.mode === "self" ? "Start Editing" : "Continue"}
         </button>
 
-        <p style={{ textAlign: "center", marginTop: 24, fontSize: 12, color: "#444" }}>
+        <p style={{ textAlign: "center", marginTop: 24, fontSize: 12, color: "var(--fg-tertiary)" }}>
           Settings can be changed anytime in the editor.
         </p>
       </div>

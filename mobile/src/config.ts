@@ -11,6 +11,8 @@ export interface AppConfig {
   baseUrl: string;
   /** Model name */
   model: string;
+  /** Emergence API key (for SaaS mode) */
+  emergenceApiKey: string;
   /** Theme: dark or light */
   theme: "dark" | "light";
   /** Whether setup is complete */
@@ -20,8 +22,9 @@ export interface AppConfig {
 const DEFAULTS: AppConfig = {
   mode: "self",
   apiKey: "",
+  emergenceApiKey: "",
   baseUrl: "https://api.deepseek.com",
-  model: "deepseek-chat",
+  model: "deepseek-v4-flash",
   theme: "dark",
   setupDone: false,
 };
@@ -51,7 +54,11 @@ export function getChatEndpoint(cfg: AppConfig): string {
 /** Build headers for API calls. */
 export function getChatHeaders(cfg: AppConfig): Record<string, string> {
   if (cfg.mode === "saas") {
-    return { "Content-Type": "application/json" };
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (cfg.emergenceApiKey) {
+      headers["Authorization"] = `Bearer ${cfg.emergenceApiKey}`;
+    }
+    return headers;
   }
   return {
     "Content-Type": "application/json",
