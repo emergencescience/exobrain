@@ -42,6 +42,23 @@ function splitParagraphs(md: string): { idx: number; text: string }[] {
   return md.split("\n\n").map((text, idx) => ({ idx, text: text.trim() })).filter((p) => p.text.length > 0);
 }
 
+// ── Breakpoint ──────────────────────────────────────────────────────
+
+const MOBILE_BREAKPOINT = 768;
+
+function useIsMobile(): boolean {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window !== "undefined") return window.innerWidth < MOBILE_BREAKPOINT;
+    return false;
+  });
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return isMobile;
+}
+
 // ── Props ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -59,8 +76,12 @@ const MARKDOWN_COMPONENTS: Record<string, React.ComponentType<any>> = {
   blockquote: ({ children }: any) => <blockquote style={{ borderLeft: "2px solid rgba(168,85,247,0.5)", paddingLeft: 10, margin: "4px 0", fontSize: 12, color: "rgba(255,255,255,0.5)", fontStyle: "italic" }}>{children}</blockquote>,
 };
 
+type Tab = "chat" | "preview";
+
 export default function ExobrainEditor({ onSettings }: Props) {
   const cfgRef = useRef<AppConfig>(loadConfig());
+  const isMobile = useIsMobile();
+  const [activeTab, setActiveTab] = useState<Tab>("preview");
   const [state, _setState] = useState<ExobrainState>(() => {
     try {
       const raw = localStorage.getItem("exobrain_edit_state");
@@ -71,10 +92,8 @@ export default function ExobrainEditor({ onSettings }: Props) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showSource, setShowSource] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Rebuild editor config byte array from panes whenever the state changes
   const setState = useCallback((v: ExobrainState | ((p: ExobrainState) => ExobrainState)) => {
     _setState((prev) => {
       const next = typeof v === "function" ? v(prev) : v;
@@ -86,6 +105,9 @@ export default function ExobrainEditor({ onSettings }: Props) {
   const { messages, documentMarkdown, comments } = state;
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+
+  // Switch to chat when user sends a message on mobile
+  const switchToChat = useCallback(() => { if (isMobile) setActiveTab("chat"); }, [isMobile]);
 
   const paragraphs = useMemo(() => splitParagraphs(documentMarkdown), [documentMarkdown]);
 
@@ -99,6 +121,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
     setState({ messages: newMessages, documentMarkdown, comments });
     setInput("");
     setLoading(true);
+    switchToChat();
 
     try {
       const body = buildChatBody(cfg, newMessages, documentMarkdown, comments);
@@ -140,14 +163,178 @@ export default function ExobrainEditor({ onSettings }: Props) {
     navigator.clipboard.writeText(documentMarkdown).catch(() => {});
   };
 
+  // ── Shared styles ──────────────────────────────────────────────────
+
+  const headerStyle: React.CSSProperties = {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    padding: "8px 12px", paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
+    borderBottom: "1px solid rgba(255,255,255,0.1)",
+    background: "rgba(0,0,0,0.9)", flexShrink: 0,
+  };
+
+  const containerStyle: React.CSSProperties = {
+    height: "100dvh", display: "flex", flexDirection: "column",
+    background: "#000", color: "#e0e0e0",
+  };
+
+  // ── Chat panel (shared) ────────────────────────────────────────────
+
+  const chatPanel = (
+    <div style={{
+      display: "flex", flexDirection: "column",
+      flex: isMobile ? 1 : undefined,
+      width: isMobile ? undefined : "40%",
+      minWidth: isMobile ? undefined : 280,
+      borderRight: isMobile ? undefined : "1px solid rgba(255,255,255,0.1)",
+      overflow: "hidden",
+    }}>
+      <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
+        {messages.length === 0 && (
+          <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", marginTop: "40%" }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>🧠</div>
+            <p style={{ fontSize: 14 }}>Chat with AI to build your paper</p>
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} style={{
+            display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start",
+            marginBottom: 8,
+          }}>
+            <div style={{
+              maxWidth: "90%", padding: "8px 12px", borderRadius: 12,
+              background: m.role === "user" ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.05)",
+              border: m.role === "user" ? "1px solid rgba(168,85,247,0.3)" : "1px solid rgba(255,255,255,0.1)",
+              fontSize: 13, lineHeight: 1.5,
+            }}>
+              {m.role === "assistant" ? (
+                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex, rehypeRaw]}>
+                  {stripMarkdownBlock(m.content)}
+                </ReactMarkdown>
+              ) : (
+                <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>
+              )}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 20 }}>●●●</div>
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Input */}
+      <div style={{ padding: 8, borderTop: "1px solid rgba(255,255,255,0.1)", paddingBottom: "max(8px, env(safe-area-inset-bottom, 0px))" }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+            placeholder="Describe your paper..."
+            disabled={loading}
+            style={{
+              flex: 1, padding: "10px 12px", borderRadius: 10,
+              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.15)",
+              color: "#e0e0e0", fontSize: 14, outline: "none",
+            }}
+          />
+          <button
+            onClick={sendMessage}
+            disabled={loading || !input.trim()}
+            style={{
+              padding: "10px 16px", borderRadius: 10, border: "none",
+              background: (loading || !input.trim()) ? "#333" : "linear-gradient(135deg, #a855f7, #06b6d4)",
+              color: "#fff", fontSize: 14, fontWeight: "bold",
+              opacity: (loading || !input.trim()) ? 0.4 : 1,
+            }}
+          >
+            →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Preview panel (shared) ─────────────────────────────────────────
+
+  const previewPanel = (
+    <div style={{
+      flex: isMobile ? 1 : undefined,
+      width: isMobile ? undefined : "60%",
+      overflow: "auto", background: "#0a0a0a", padding: 16,
+      paddingBottom: isMobile ? "max(16px, env(safe-area-inset-bottom, 0px))" : 16,
+    }}>
+      {showSource ? (
+        <pre style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", whiteSpace: "pre-wrap", fontFamily: "monospace" }}>
+          {documentMarkdown}
+        </pre>
+      ) : (
+        <div style={{ maxWidth: 640, margin: "0 auto" }}>
+          {paragraphs.map((p) => (
+            <div key={p.idx} style={{ marginBottom: 12 }}>
+              <ReactMarkdown
+                remarkPlugins={[remarkMath]}
+                rehypePlugins={[rehypeKatex, rehypeRaw]}
+                components={MARKDOWN_COMPONENTS}
+              >
+                {p.text}
+              </ReactMarkdown>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // ── Mobile tab bar ─────────────────────────────────────────────────
+
+  const mobileTabs = (
+    <div style={{
+      display: "flex", borderBottom: "1px solid rgba(255,255,255,0.1)",
+      background: "rgba(0,0,0,0.95)", flexShrink: 0,
+    }}>
+      <button
+        onClick={() => setActiveTab("preview")}
+        style={{
+          flex: 1, padding: "10px 0", border: "none",
+          background: activeTab === "preview" ? "rgba(255,255,255,0.05)" : "transparent",
+          color: activeTab === "preview" ? "#e0e0e0" : "#666",
+          fontSize: 13, fontWeight: activeTab === "preview" ? "bold" : "normal",
+          borderBottom: activeTab === "preview" ? "2px solid #a855f7" : "2px solid transparent",
+          cursor: "pointer",
+        }}
+      >
+        📄 Document
+      </button>
+      <button
+        onClick={() => setActiveTab("chat")}
+        style={{
+          flex: 1, padding: "10px 0", border: "none",
+          background: activeTab === "chat" ? "rgba(255,255,255,0.05)" : "transparent",
+          color: activeTab === "chat" ? "#e0e0e0" : "#666",
+          fontSize: 13, fontWeight: activeTab === "chat" ? "bold" : "normal",
+          borderBottom: activeTab === "chat" ? "2px solid #06b6d4" : "2px solid transparent",
+          cursor: "pointer",
+        }}
+      >
+        💬 Chat
+        {messages.length > 0 && (
+          <span style={{
+            marginLeft: 4, padding: "1px 6px", borderRadius: 8,
+            background: "rgba(6,182,212,0.2)", fontSize: 10, color: "#06b6d4",
+          }}>
+            {messages.length}
+          </span>
+        )}
+      </button>
+    </div>
+  );
+
+  // ── Render ─────────────────────────────────────────────────────────
+
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#000", color: "#e0e0e0" }}>
+    <div style={containerStyle}>
       {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.1)",
-        background: "rgba(0,0,0,0.9)", flexShrink: 0,
-      }}>
+      <div style={headerStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{
             fontSize: 16, fontWeight: "bold",
@@ -157,7 +344,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
             Exobrain
           </span>
           <span style={{ fontSize: 10, color: "#555" }}>
-            {cfgRef.current.mode === "self" ? "🔑 Self" : "☁️ SaaS"}
+            {cfgRef.current.mode === "self" ? "🔑" : "☁️"}
           </span>
         </div>
         <div style={{ display: "flex", gap: 4 }}>
@@ -170,101 +357,23 @@ export default function ExobrainEditor({ onSettings }: Props) {
         </div>
       </div>
 
-      {/* Main */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        {/* Chat (40%) */}
-        <div style={{
-          width: "40%", minWidth: 280, display: "flex", flexDirection: "column",
-          borderRight: "1px solid rgba(255,255,255,0.1)",
-        }}>
-          <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
-            {messages.length === 0 && (
-              <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", marginTop: "40%" }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>🧠</div>
-                <p style={{ fontSize: 14 }}>Chat with AI to build your paper</p>
-              </div>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} style={{
-                display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start",
-                marginBottom: 8,
-              }}>
-                <div style={{
-                  maxWidth: "90%", padding: "8px 12px", borderRadius: 12,
-                  background: m.role === "user" ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.05)",
-                  border: m.role === "user" ? "1px solid rgba(168,85,247,0.3)" : "1px solid rgba(255,255,255,0.1)",
-                  fontSize: 13, lineHeight: 1.5,
-                }}>
-                  {m.role === "assistant" ? (
-                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex, rehypeRaw]}>
-                      {stripMarkdownBlock(m.content)}
-                    </ReactMarkdown>
-                  ) : (
-                    <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>
-                  )}
-                </div>
-              </div>
-            ))}
-            {loading && (
-              <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 20 }}>●●●</div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          {/* Input */}
-          <div style={{ padding: 8, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
-            <div style={{ display: "flex", gap: 6 }}>
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                placeholder="Describe your paper..."
-                disabled={loading}
-                style={{
-                  flex: 1, padding: "10px 12px", borderRadius: 10,
-                  background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.15)",
-                  color: "#e0e0e0", fontSize: 14, outline: "none",
-                }}
-              />
-              <button
-                onClick={sendMessage}
-                disabled={loading || !input.trim()}
-                style={{
-                  padding: "10px 16px", borderRadius: 10, border: "none",
-                  background: (loading || !input.trim()) ? "#333" : "linear-gradient(135deg, #a855f7, #06b6d4)",
-                  color: "#fff", fontSize: 14, fontWeight: "bold",
-                  opacity: (loading || !input.trim()) ? 0.4 : 1,
-                }}
-              >
-                →
-              </button>
-            </div>
-          </div>
+      {/* Desktop: side-by-side */}
+      {!isMobile && (
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+          {chatPanel}
+          {previewPanel}
         </div>
+      )}
 
-        {/* Preview (60%) */}
-        <div style={{ width: "60%", overflow: "auto", background: "#0a0a0a", padding: 16 }}>
-          {showSource ? (
-            <pre style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", whiteSpace: "pre-wrap", fontFamily: "monospace" }}>
-              {documentMarkdown}
-            </pre>
-          ) : (
-            <div style={{ maxWidth: 640, margin: "0 auto" }}>
-              {paragraphs.map((p) => (
-                <div key={p.idx} style={{ marginBottom: 12 }}>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkMath]}
-                    rehypePlugins={[rehypeKatex, rehypeRaw]}
-                    components={MARKDOWN_COMPONENTS}
-                  >
-                    {p.text}
-                  </ReactMarkdown>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+      {/* Mobile: tabs + single column */}
+      {isMobile && (
+        <>
+          {mobileTabs}
+          <div style={{ flex: 1, overflow: "hidden", display: "flex" }}>
+            {activeTab === "chat" ? chatPanel : previewPanel}
+          </div>
+        </>
+      )}
     </div>
   );
 }

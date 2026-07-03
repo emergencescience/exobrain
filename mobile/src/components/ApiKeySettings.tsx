@@ -20,7 +20,8 @@ export default function ApiKeySettings({ onComplete }: Props) {
 
   return (
     <div style={{
-      minHeight: "100vh", background: "#0a0a0a", color: "#e0e0e0",
+      minHeight: "100dvh", background: "#0a0a0a", color: "#e0e0e0",
+      paddingTop: "max(24px, env(safe-area-inset-top, 0px))",
       display: "flex", flexDirection: "column", alignItems: "center",
       justifyContent: "center", padding: 24, fontFamily: "system-ui, sans-serif",
     }}>
