@@ -14,24 +14,6 @@ interface ExobrainState {
   comments: Record<number, string[]>;
 }
 
-// ── Defaults ────────────────────────────────────────────────────────
-
-const DEFAULT_DOC = `# Untitled Paper
-
-## Introduction
-
-This is your mathematical paper. Start editing or chat with the AI to build it.
-
-## Equations
-
-Inline math: $E = mc^2$
-
-Block math:
-
-$$\\int_{0}^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$$
-
-`;
-
 // ── Helpers ─────────────────────────────────────────────────────────
 
 function stripMarkdownBlock(content: string): string {
@@ -78,16 +60,96 @@ const MARKDOWN_COMPONENTS: Record<string, React.ComponentType<any>> = {
 
 type Tab = "chat" | "preview";
 
+// ── i18n ──────────────────────────────────────────────────────────────
+
+const STR = {
+  en: {
+    title: "Exobrain",
+    chat_with_ai: "Chat with AI to build your paper",
+    describe_paper: "Describe your paper...",
+    hints: [
+      "Write an introduction for Riemann zeta function",
+      "Derive the quadratic formula step by step",
+      "Explain the Central Limit Theorem",
+      "Prove the Pythagorean theorem",
+    ],
+    tab_chat: "💬 Chat",
+    tab_doc: "📄 Document",
+    no_projects: "No projects",
+    new_project: "➕ New Project",
+    untitled: "Untitled Paper",
+    delete_confirm: "Delete this project?",
+    saving: "saving...",
+    default_intro: "This is your mathematical paper. Start editing or chat with the AI to build it.",
+  },
+  zh: {
+    title: "Exobrain",
+    chat_with_ai: "与 AI 对话，构建你的论文",
+    describe_paper: "描述你想要的论文...",
+    hints: [
+      "撰写黎曼 zeta 函数的论文引言",
+      "逐步推导二次公式",
+      "解释中心极限定理",
+      "证明毕达哥拉斯定理",
+    ],
+    tab_chat: "💬 对话",
+    tab_doc: "📄 文档",
+    no_projects: "暂无项目",
+    new_project: "➕ 新建项目",
+    untitled: "未命名论文",
+    delete_confirm: "确定删除此项目？",
+    saving: "保存中...",
+    default_intro: "这是你的数学论文。开始编辑或与 AI 对话来构建它。",
+  },
+};
+
+const DEFAULT_DOC = `# Untitled Paper
+
+## Introduction
+
+This is your mathematical paper. Start editing or chat with the AI to build it.
+
+## Equations
+
+Inline math: $E = mc^2$
+
+Block math:
+
+$$\\\\int_{0}^{\\\\infty} e^{-x^2} dx = \\\\frac{\\\\sqrt{\\\\pi}}{2}$$
+
+`;
+
+const DEFAULT_DOC_ZH = `# 未命名论文
+
+## 引言
+
+这是你的数学论文。开始编辑或与 AI 对话来构建它。
+
+## 方程式
+
+行内公式: $E = mc^2$
+
+块级公式:
+
+$$\\\\int_{0}^{\\\\infty} e^{-x^2} dx = \\\\frac{\\\\sqrt{\\\\pi}}{2}$$
+
+`;
+
 export default function ExobrainEditor({ onSettings }: Props) {
-  const cfgRef = useRef<AppConfig>(loadConfig());
+  const [cfg, setCfg] = useState<AppConfig>(loadConfig);
+  const cfgRef = useRef(cfg);
+  cfgRef.current = cfg; // always latest for callbacks
   const isMobile = useIsMobile();
+  const isSaaS = cfg.mode === "saas";
+  const t = STR[cfg.lang] || STR.en;
+  const defaultDoc = cfg.lang === "zh" ? DEFAULT_DOC_ZH : DEFAULT_DOC;
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [state, _setState] = useState<ExobrainState>(() => {
     try {
       const raw = localStorage.getItem("exobrain_edit_state");
       if (raw) return JSON.parse(raw);
     } catch {}
-    return { messages: [], documentMarkdown: DEFAULT_DOC, comments: {} };
+    return { messages: [], documentMarkdown: defaultDoc, comments: {} };
   });
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -101,7 +163,11 @@ export default function ExobrainEditor({ onSettings }: Props) {
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [savingStatus, setSavingStatus] = useState<"idle" | "saving">("idle");
 
-  const isSaaS = cfgRef.current.mode === "saas";
+  // Reload config when returning from settings
+  useEffect(() => {
+    const fresh = loadConfig();
+    setCfg(fresh);
+  }, []);
 
   const setState = useCallback((v: ExobrainState | ((p: ExobrainState) => ExobrainState)) => {
     _setState((prev) => {
@@ -149,7 +215,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
     setProjectsOpen(false);
     setState({
       messages: (doc.messages || []) as Message[],
-      documentMarkdown: doc.markdown || DEFAULT_DOC,
+      documentMarkdown: doc.markdown || defaultDoc,
       comments: {},
     });
   }, []);
@@ -161,7 +227,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
       const resp = await fetch(getDocumentsEndpoint(cfg), {
         method: "POST",
         headers: getChatHeaders(cfg),
-        body: JSON.stringify({ title: "Untitled Paper" }),
+        body: JSON.stringify({ title: t.untitled }),
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -185,7 +251,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
         if (currentDocId === id) {
           setCurrentDocId(null);
           setDocTitle("");
-          setState({ messages: [], documentMarkdown: DEFAULT_DOC, comments: {} });
+          setState({ messages: [], documentMarkdown: defaultDoc, comments: {} });
         }
       }
     } catch {}
@@ -255,7 +321,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
   };
 
   const clearSession = () => {
-    setState({ messages: [], documentMarkdown: DEFAULT_DOC, comments: {} });
+    setState({ messages: [], documentMarkdown: defaultDoc, comments: {} });
   };
 
   const copyDoc = () => {
@@ -293,17 +359,12 @@ export default function ExobrainEditor({ onSettings }: Props) {
         {messages.length === 0 && (
           <div style={{ textAlign: "center", color: "var(--fg-dim)", marginTop: isMobile ? "20%" : "40%" }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>🧠</div>
-            <p style={{ fontSize: 14, marginBottom: 16 }}>Chat with AI to build your paper</p>
+            <p style={{ fontSize: 14, marginBottom: 16 }}>{t.chat_with_ai}</p>
             <div style={{
               display: "flex", flexDirection: "column", gap: 8,
               maxWidth: 300, margin: "0 auto",
             }}>
-              {[
-                "Write an introduction for Riemann zeta function",
-                "Derive the quadratic formula step by step",
-                "Explain the Central Limit Theorem",
-                "Prove the Pythagorean theorem",
-              ].map((hint) => (
+              {t.hints.map((hint) => (
                 <button
                   key={hint}
                   onClick={() => {
@@ -367,7 +428,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            placeholder="Describe your paper..."
+            placeholder={t.describe_paper}
             disabled={loading}
             style={{
               flex: 1, padding: "10px 12px", borderRadius: 10,
@@ -441,7 +502,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
           cursor: "pointer",
         }}
       >
-        💬 Chat
+        💬 {t.tab_chat}
         {messages.length > 0 && (
           <span style={{
             marginLeft: 4, padding: "1px 6px", borderRadius: 8,
@@ -462,7 +523,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
           cursor: "pointer",
         }}
       >
-        📄 Document
+        {t.tab_doc}
       </button>
     </div>
   );
@@ -483,7 +544,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
               background: "linear-gradient(135deg, #a855f7, #06b6d4)",
               WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
             }}>
-              Exobrain
+              {t.title}
             </span>
           </span>
           <span style={{ fontSize: 10, color: "var(--fg-tertiary)" }}>
@@ -514,7 +575,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
                   boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
                 }}>
                   {projects.length === 0 ? (
-                    <div style={{ padding: 12, fontSize: 12, color: "var(--fg-dim)" }}>No projects</div>
+                    <div style={{ padding: 12, fontSize: 12, color: "var(--fg-dim)" }}>{t.no_projects}</div>
                   ) : (
                     projects.map((p) => (
                       <div key={p.id} style={{
@@ -530,7 +591,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
                           </span>
                         </div>
                         <button
-                          onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) deleteProject(p.id); }}
+                          onClick={(e) => { e.stopPropagation(); if (confirm(t.delete_confirm)) deleteProject(p.id); }}
                           style={{ ...btnStyle(false), fontSize: 12, padding: "1px 4px", opacity: 0.5 }}
                         >
                           🗑
@@ -547,7 +608,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
                         fontSize: 12, cursor: "pointer",
                       }}
                     >
-                      ➕ New Project
+                      ➕ {t.new_project}
                     </button>
                   </div>
                 </div>

@@ -220,6 +220,40 @@ export default function ApiKeySettings({ onComplete }: Props) {
           </button>
         </div>
 
+        {/* Language selector */}
+        <label style={{ fontSize: 12, color: "var(--fg-secondary)", marginBottom: 4, display: "block" }}>
+          Language / 语言
+        </label>
+        <div style={{
+          display: "flex", borderRadius: 12, overflow: "hidden",
+          border: "1px solid var(--border-hover)", marginBottom: 20,
+        }}>
+          <button
+            onClick={() => setCfg({ ...cfg, lang: "en" })}
+            style={{
+              flex: 1, padding: "10px 0", border: "none",
+              background: cfg.lang === "en" ? "#a855f720" : "transparent",
+              color: cfg.lang === "en" ? "#a855f7" : "var(--fg-tertiary)",
+              fontSize: 13, fontWeight: cfg.lang === "en" ? "bold" : "normal",
+              cursor: "pointer",
+            }}
+          >
+            🇺🇸 English
+          </button>
+          <button
+            onClick={() => setCfg({ ...cfg, lang: "zh" })}
+            style={{
+              flex: 1, padding: "10px 0", border: "none",
+              background: cfg.lang === "zh" ? "#f59e0b20" : "transparent",
+              color: cfg.lang === "zh" ? "#f59e0b" : "var(--fg-tertiary)",
+              fontSize: 13, fontWeight: cfg.lang === "zh" ? "bold" : "normal",
+              cursor: "pointer",
+            }}
+          >
+            🇨🇳 中文
+          </button>
+        </div>
+
         {/* Save button */}
         <button
           onClick={handleSave}

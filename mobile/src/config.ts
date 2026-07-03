@@ -15,6 +15,8 @@ export interface AppConfig {
   emergenceApiKey: string;
   /** Theme: dark or light */
   theme: "dark" | "light";
+  /** Language */
+  lang: "en" | "zh";
   /** Whether setup is complete */
   setupDone: boolean;
 }
@@ -26,6 +28,7 @@ const DEFAULTS: AppConfig = {
   baseUrl: "https://api.deepseek.com",
   model: "deepseek-v4-flash",
   theme: "dark",
+  lang: "en",
   setupDone: false,
 };
 

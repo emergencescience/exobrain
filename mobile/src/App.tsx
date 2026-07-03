@@ -7,10 +7,11 @@ export default function App() {
   const cfg = loadConfig();
   const [showSettings, setShowSettings] = useState(!cfg.setupDone);
 
-  // Apply theme on mount and when settings change
+  // Apply theme + lang on mount and when settings change
   useEffect(() => {
     const current = loadConfig();
     document.documentElement.setAttribute("data-theme", current.theme || "dark");
+    document.documentElement.setAttribute("lang", current.lang || "en");
   }, [showSettings]);
 
   if (showSettings) {
