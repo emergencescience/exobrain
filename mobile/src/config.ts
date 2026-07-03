@@ -51,6 +51,12 @@ export function getChatEndpoint(cfg: AppConfig): string {
   return `${cfg.baseUrl}/v1/chat/completions`;
 }
 
+/** Build documents API URL (SaaS only — no fallback for self-hosted). */
+export function getDocumentsEndpoint(_cfg: AppConfig, docId?: string): string {
+  const base = "https://api.emergence.science/api/play/exobrain/documents";
+  return docId ? `${base}/${docId}` : base;
+}
+
 /** Build headers for API calls. */
 export function getChatHeaders(cfg: AppConfig): Record<string, string> {
   if (cfg.mode === "saas") {
@@ -64,6 +70,16 @@ export function getChatHeaders(cfg: AppConfig): Record<string, string> {
     "Content-Type": "application/json",
     Authorization: `Bearer ${cfg.apiKey}`,
   };
+}
+
+/** Document type returned by the backend. */
+export interface DocInfo {
+  id: string;
+  title: string;
+  markdown: string;
+  messages: { role: string; content: string }[];
+  created_at: string;
+  updated_at: string;
 }
 
 /** Build chat request body. */
