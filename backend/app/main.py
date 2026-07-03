@@ -38,7 +38,7 @@ app.include_router(verify_router)
 
 
 # Static files — mobile web app served at /m/
-MOBILE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "mobile", "dist")
+MOBILE_DIR = os.path.join(os.path.dirname(__file__), "mobile_dist")
 if os.path.isdir(MOBILE_DIR):
     app.mount("/m", StaticFiles(directory=MOBILE_DIR, html=True), name="mobile")
     logger.info(f"Mobile app mounted at /m/ from {MOBILE_DIR}")
