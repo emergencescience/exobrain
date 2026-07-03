@@ -49,12 +49,12 @@ interface Props {
 
 const MARKDOWN_COMPONENTS: Record<string, React.ComponentType<any>> = {
   p: ({ children }: any) => <p style={{ margin: "4px 0", fontSize: 13, color: "var(--fg)" }}>{children}</p>,
-  h1: ({ children }: any) => <h1 style={{ fontSize: 18, fontWeight: "bold", color: "rgba(255,255,255,0.9)", margin: "12px 0 6px" }}>{children}</h1>,
-  h2: ({ children }: any) => <h2 style={{ fontSize: 16, fontWeight: "bold", color: "rgba(255,255,255,0.85)", margin: "10px 0 4px" }}>{children}</h2>,
+  h1: ({ children }: any) => <h1 style={{ fontSize: 18, fontWeight: "bold", color: "var(--heading-primary)", margin: "12px 0 6px" }}>{children}</h1>,
+  h2: ({ children }: any) => <h2 style={{ fontSize: 16, fontWeight: "bold", color: "var(--heading-secondary)", margin: "10px 0 4px" }}>{children}</h2>,
   h3: ({ children }: any) => <h3 style={{ fontSize: 14, fontWeight: 600, color: "var(--fg-secondary)", margin: "8px 0 2px" }}>{children}</h3>,
   code: ({ children, className }: any) => !className
     ? <code style={{ background: "var(--comment-bg)", padding: "2px 4px", borderRadius: 3, fontSize: 12, color: "var(--fg-link)" }}>{children}</code>
-    : <pre style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, padding: 8, overflow: "auto", margin: "6px 0" }}><code style={{ fontSize: 11, color: "var(--fg-link)" }}>{children}</code></pre>,
+    : <pre style={{ background: "var(--pre-bg)", border: "1px solid var(--pre-border)", borderRadius: 6, padding: 8, overflow: "auto", margin: "6px 0" }}><code style={{ fontSize: 11, color: "var(--fg-link)" }}>{children}</code></pre>,
   blockquote: ({ children }: any) => <blockquote style={{ borderLeft: "2px solid rgba(168,85,247,0.5)", paddingLeft: 10, margin: "4px 0", fontSize: 12, color: "var(--btn-text)", fontStyle: "italic" }}>{children}</blockquote>,
 };
 
@@ -371,7 +371,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
   const headerStyle: React.CSSProperties = {
     display: "flex", alignItems: "center", justifyContent: "space-between",
     padding: "8px 12px", paddingTop: "max(8px, env(safe-area-inset-top, 0px))",
-    borderBottom: "1px solid rgba(255,255,255,0.1)",
+    borderBottom: "1px solid var(--divider)",
     background: "var(--header-bg)", flexShrink: 0,
     position: "sticky", top: 0, zIndex: 10,
   };
@@ -390,7 +390,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
       flex: isMobile ? 1 : undefined,
       width: isMobile ? undefined : "40%",
       minWidth: isMobile ? undefined : 280,
-      borderRight: isMobile ? undefined : "1px solid rgba(255,255,255,0.1)",
+      borderRight: isMobile ? undefined : "1px solid var(--divider)",
       overflow: "hidden",
     }}>
       <div ref={chatContainerRef} style={{ flex: 1, overflow: "auto", padding: 12, overscrollBehavior: "contain" }}>
@@ -413,17 +413,17 @@ export default function ExobrainEditor({ onSettings }: Props) {
                   }}
                   style={{
                     textAlign: "left", padding: "10px 14px", borderRadius: 10,
-                    border: "1px solid rgba(255,255,255,0.1)",
+                    border: "1px solid var(--hint-border)",
                     background: "var(--suggestion-bg)",
                     color: "var(--fg-muted)", fontSize: 12, cursor: "pointer",
                     transition: "all 0.15s",
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = "rgba(168,85,247,0.3)";
+                    e.currentTarget.style.borderColor = "var(--hint-hover-border)";
                     e.currentTarget.style.color = "var(--fg-secondary)";
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.1)";
+                    e.currentTarget.style.borderColor = "var(--hint-border)";
                     e.currentTarget.style.color = "var(--fg-muted)";
                   }}
                 >
@@ -460,7 +460,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
       </div>
 
       {/* Input */}
-      <div style={{ padding: 8, borderTop: "1px solid rgba(255,255,255,0.1)", paddingBottom: "max(8px, env(safe-area-inset-bottom, 0px))" }}>
+      <div style={{ padding: 8, borderTop: "1px solid var(--divider)", paddingBottom: "max(8px, env(safe-area-inset-bottom, 0px))" }}>
         <div style={{ display: "flex", gap: 6 }}>
           <input
             value={input}
@@ -471,7 +471,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
             style={{
               flex: 1, padding: "10px 12px", borderRadius: 10,
               background: "var(--input-bg)", border: "1px solid var(--border-hover)",
-              color: "#e0e0e0", fontSize: 14, outline: "none",
+              color: "var(--fg)", fontSize: 14, outline: "none",
             }}
           />
           <button
@@ -479,7 +479,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
             disabled={loading || !input.trim()}
             style={{
               padding: "10px 16px", borderRadius: 10, border: "none",
-              background: (loading || !input.trim()) ? "var(--btn-disabled)" : "linear-gradient(135deg, #a855f7, #06b6d4)",
+              background: (loading || !input.trim()) ? "var(--btn-disabled)" : "var(--gradient-btn)",
               color: "#fff", fontSize: 14, fontWeight: "bold",
               opacity: (loading || !input.trim()) ? 0.4 : 1,
             }}
@@ -525,16 +525,16 @@ export default function ExobrainEditor({ onSettings }: Props) {
   // ── Mobile tab bar ─────────────────────────────────────────────────
 
   const mobileTabs = (
-    <div style={{
-      display: "flex", borderBottom: "1px solid rgba(255,255,255,0.1)",
+      <div style={{
+      display: "flex", borderBottom: "1px solid var(--divider)",
       background: "var(--tab-bg)", flexShrink: 0,
     }}>
       <button
         onClick={() => setActiveTab("chat")}
         style={{
           flex: 1, padding: "10px 0", border: "none",
-          background: activeTab === "chat" ? "rgba(255,255,255,0.05)" : "transparent",
-          color: activeTab === "chat" ? "#e0e0e0" : "#666",
+          background: activeTab === "chat" ? "var(--tab-active-bg)" : "transparent",
+          color: activeTab === "chat" ? "var(--tab-active-fg)" : "var(--tab-inactive-fg)",
           fontSize: 13, fontWeight: activeTab === "chat" ? "bold" : "normal",
           borderBottom: activeTab === "chat" ? "2px solid #06b6d4" : "2px solid transparent",
           cursor: "pointer",
@@ -554,8 +554,8 @@ export default function ExobrainEditor({ onSettings }: Props) {
         onClick={() => setActiveTab("preview")}
         style={{
           flex: 1, padding: "10px 0", border: "none",
-          background: activeTab === "preview" ? "rgba(255,255,255,0.05)" : "transparent",
-          color: activeTab === "preview" ? "#e0e0e0" : "#666",
+          background: activeTab === "preview" ? "var(--tab-active-bg)" : "transparent",
+          color: activeTab === "preview" ? "var(--tab-active-fg)" : "var(--tab-inactive-fg)",
           fontSize: 13, fontWeight: activeTab === "preview" ? "bold" : "normal",
           borderBottom: activeTab === "preview" ? "2px solid #a855f7" : "2px solid transparent",
           cursor: "pointer",
@@ -568,8 +568,8 @@ export default function ExobrainEditor({ onSettings }: Props) {
           onClick={runVerify}
           style={{
             flex: 1, padding: "10px 0", border: "none",
-            background: activeTab === "verify" ? "rgba(255,255,255,0.05)" : "transparent",
-            color: activeTab === "verify" ? "#e0e0e0" : "#666",
+            background: activeTab === "verify" ? "var(--tab-active-bg)" : "transparent",
+            color: activeTab === "verify" ? "var(--tab-active-fg)" : "var(--tab-inactive-fg)",
             fontSize: 13, fontWeight: activeTab === "verify" ? "bold" : "normal",
             borderBottom: activeTab === "verify" ? "2px solid #f59e0b" : "2px solid transparent",
             cursor: "pointer",
@@ -672,7 +672,7 @@ export default function ExobrainEditor({ onSettings }: Props) {
                   position: "absolute", top: "100%", left: 0, zIndex: 100,
                   background: "var(--bg-tertiary)", border: "1px solid var(--border)",
                   borderRadius: 8, minWidth: 200, maxHeight: 300, overflow: "auto",
-                  boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+                  boxShadow: "0 4px 12px var(--shadow-dropdown)",
                 }}>
                   {projects.length === 0 ? (
                     <div style={{ padding: 12, fontSize: 12, color: "var(--fg-dim)" }}>{t.no_projects}</div>
@@ -749,9 +749,9 @@ export default function ExobrainEditor({ onSettings }: Props) {
 
 function btnStyle(active: boolean): React.CSSProperties {
   return {
-    padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)",
+    padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border-hover)",
     background: active ? "rgba(168,85,247,0.2)" : "transparent",
-    color: active ? "#a855f7" : "rgba(255,255,255,0.5)",
-    fontSize: 14, cursor: "pointer",
+    color: active ? "var(--btn-active-color)" : "var(--btn-text)",
+    fontSize: 13, cursor: "pointer",
   };
 }

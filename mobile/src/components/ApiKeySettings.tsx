@@ -37,8 +37,8 @@ export default function ApiKeySettings({ onComplete }: Props) {
           }}>
             Exobrain
           </h1>
-          <p style={{ fontSize: 14, color: "var(--fg-tertiary)" }}>
-            AI-powered mathematical paper editor
+          <p style={{ fontSize: 14, color: "var(--fg-secondary)" }}>
+            {cfg.lang === "zh" ? "AI 驱动的数学论文编辑器" : "AI-powered mathematical paper editor"}
           </p>
         </div>
 
