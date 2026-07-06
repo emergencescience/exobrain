@@ -41,7 +41,10 @@ def extract_equations(markdown: str) -> list[tuple[int, str, str]]:
         # Check for inline equations
         for match in inline_pattern.finditer(line):
             eq = match.group(1).strip()
-            if eq and len(eq) > 2 and not eq.startswith("\\"):
+            # Keep any non-trivial equation. (Previously equations starting
+            # with a LaTeX command like \frac, \sin, \sum were wrongly
+            # dropped — that silently skipped ~half of real equations.)
+            if eq and len(eq) > 2:
                 equations.append((line_idx, eq, "inline"))
 
     return equations
