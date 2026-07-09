@@ -25,8 +25,8 @@ class CreateDocumentRequest(BaseModel):
 
 
 class UpdateDocumentRequest(BaseModel):
-    markdown: str = ""
-    messages: list[dict] = []
+    markdown: str | None = None
+    messages: list[dict] | None = None
     title: str | None = None
 
 
@@ -71,11 +71,17 @@ async def update_document(
     user_id: str = Depends(get_user_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
-    """Update document markdown and/or messages (owner-only)."""
+    """Update document markdown, messages and/or title (owner-only, partial).
+
+    Any field left null is preserved from the existing document — so a title-only
+    rename does not wipe content, and a content save does not require the title.
+    """
     existing = await storage.get_document(doc_id)
     if existing is None or existing.user_id != user_id:
         raise HTTPException(status_code=404, detail="Document not found")
-    doc = await storage.update_document(doc_id, req.markdown, req.messages, title=req.title)
+    markdown = req.markdown if req.markdown is not None else existing.markdown
+    messages = req.messages if req.messages is not None else existing.messages
+    doc = await storage.update_document(doc_id, markdown, messages, title=req.title)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"document": doc.to_dict()}
