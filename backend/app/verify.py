@@ -35,16 +35,13 @@ def extract_equations(markdown: str) -> list[tuple[int, str, str]]:
         # Check for block equations
         for match in block_pattern.finditer(line):
             eq = match.group(1).strip()
-            if eq and len(eq) > 2:  # skip trivial like just "x"
+            if eq and len(eq) >= 1:  # accept single-digit/char answers like "$3$" or "$x$"
                 equations.append((line_idx, eq, "block"))
 
         # Check for inline equations
         for match in inline_pattern.finditer(line):
             eq = match.group(1).strip()
-            # Keep any non-trivial equation. (Previously equations starting
-            # with a LaTeX command like \frac, \sin, \sum were wrongly
-            # dropped — that silently skipped ~half of real equations.)
-            if eq and len(eq) > 2:
+            if eq and len(eq) >= 1:
                 equations.append((line_idx, eq, "inline"))
 
     return equations
@@ -83,17 +80,45 @@ def _manual_latex_convert(latex: str) -> str | None:
     """
     s = latex.strip()
 
-    # Clean up: implicit multiplication
-    s = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', s)  # 2x → 2*x
-    s = re.sub(r'\)(\()', r')*(', s)       # (a)(b) → (a)*(b)
-    s = re.sub(r'\)([a-zA-Z])', r')*\1', s)  # (a)b → (a)*b
-    s = re.sub(r'([a-zA-Z])\(', r'\1*(', s)  # a(b) → a*(b)
+    # Known function names that should NOT get implicit multiplication
+    # after them (e.g. sin(x) → sin(x), NOT sin*(x))
+    _FUNCTION_NAMES = {
+        'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
+        'sinh', 'cosh', 'tanh',
+        'arcsin', 'arccos', 'arctan',
+        'log', 'ln', 'exp', 'sqrt',
+        'Sum', 'Product', 'Integral', 'Derivative',
+        'abs', 'max', 'min',
+    }
+
+    def _add_implicit_mult(s: str) -> str:
+        """Add * for implicit multiplication, but skip function names."""
+        # 2x → 2*x
+        s = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', s)
+        # )( → )*(
+        s = re.sub(r'\)\(', r')*(', s)
+        # )letter → )*letter
+        s = re.sub(r'\)([a-zA-Z])', r')*\1', s)
+        # letter( → letter*(  BUT skip function names
+        s = re.sub(r'([a-zA-Z])\(', _maybe_add_mult, s)
+        return s
+
+    def _maybe_add_mult(m: re.Match) -> str:
+        """Add * only if the matched letter is NOT a function name suffix."""
+        prefix = m.group(1)
+        # Check if 'sin' ends with 'n' etc. — look back for known function names
+        for fn in sorted(_FUNCTION_NAMES, key=len, reverse=True):
+            if m.string[max(0, m.start() - len(fn) + 1):m.start() + 1] == fn:
+                return m.group(0)  # keep as-is, no *
+        return prefix + '*('
+
+    s = _add_implicit_mult(s)
 
     # Handle common LaTeX formatting
     replacements = [
         (r"\left", ""), (r"\right", ""),
         (r"\cdot", "*"), (r"\times", "*"),
-        (r"\frac{", "("), (r"}{", ")/("),  # \frac{a}{b} → (a)/(b) — needs careful handling
+        # \frac is handled separately by _handle_frac() above
         (r"\sqrt{", "sqrt("),
         (r"\sin", "sin"), (r"\cos", "cos"), (r"\tan", "tan"),
         (r"\log", "log"), (r"\ln", "ln"),
