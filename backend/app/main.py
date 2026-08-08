@@ -13,6 +13,7 @@ from app.routes.chat import router as chat_router
 from app.routes.compute import router as compute_router
 from app.routes.documents import router as documents_router
 from app.routes.verify import router as verify_router
+from app.routes.run import router as run_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("exobrain")
@@ -37,6 +38,7 @@ app.include_router(chat_router)
 app.include_router(compute_router)
 app.include_router(documents_router)
 app.include_router(verify_router)
+app.include_router(run_router)
 
 
 # Static files — mobile web app served at /m/
