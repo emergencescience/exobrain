@@ -1,15 +1,28 @@
 """Exobrain configuration — all via environment variables."""
 
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 @dataclass
 class Config:
     # LLM provider — any OpenAI-compatible API
-    llm_api_key: str = field(default_factory=lambda: os.getenv("EXOBRAIN_LLM_API_KEY", ""))
-    llm_base_url: str = field(default_factory=lambda: os.getenv("EXOBRAIN_LLM_BASE_URL", "https://api.deepseek.com"))
-    llm_model: str = field(default_factory=lambda: os.getenv("EXOBRAIN_LLM_MODEL", "deepseek-chat"))
+    llm_api_key: str = field(
+        default_factory=lambda: os.getenv("EXOBRAIN_LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+    )
+    llm_base_url: str = field(
+        default_factory=lambda: os.getenv("EXOBRAIN_LLM_BASE_URL")
+        or os.getenv("OPENAI_API_BASE")
+        or "https://api.deepseek.com"
+    )
+    llm_model: str = field(
+        default_factory=lambda: os.getenv("EXOBRAIN_LLM_MODEL") or os.getenv("OPENAI_MODEL") or "deepseek-chat"
+    )
 
     # Server
     host: str = field(default_factory=lambda: os.getenv("EXOBRAIN_HOST", "0.0.0.0"))

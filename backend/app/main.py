@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import config
 from app.routes.chat import router as chat_router
+from app.routes.compute import router as compute_router
 from app.routes.documents import router as documents_router
 from app.routes.verify import router as verify_router
 
@@ -33,6 +34,7 @@ app.add_middleware(
 
 # Routes
 app.include_router(chat_router)
+app.include_router(compute_router)
 app.include_router(documents_router)
 app.include_router(verify_router)
 

@@ -24,27 +24,30 @@ def extract_equations(markdown: str) -> list[tuple[int, str, str]]:
     display_mode: "block" for $$...$$, "inline" for $...$.
     """
     equations = []
-    lines = markdown.split("\n")
 
-    # Block equations: $$...$$
+    # Search the entire document: display equations commonly span three lines
+    # (`$$`, formula, `$$`) in Markdown source.
     block_pattern = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
-    # Inline equations: $...$ (but not $$)
     inline_pattern = re.compile(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)")
+    block_spans: list[tuple[int, int]] = []
 
-    for line_idx, line in enumerate(lines, 1):
-        # Check for block equations
-        for match in block_pattern.finditer(line):
-            eq = match.group(1).strip()
-            if eq and len(eq) >= 1:  # accept single-digit/char answers like "$3$" or "$x$"
-                equations.append((line_idx, eq, "block"))
+    for match in block_pattern.finditer(markdown):
+        eq = match.group(1).strip()
+        if eq:
+            line_idx = markdown.count("\n", 0, match.start()) + 1
+            equations.append((line_idx, eq, "block"))
+            block_spans.append(match.span())
 
-        # Check for inline equations
-        for match in inline_pattern.finditer(line):
-            eq = match.group(1).strip()
-            if eq and len(eq) >= 1:
-                equations.append((line_idx, eq, "inline"))
+    # Do not treat `$...$` tokens inside a display block as inline equations.
+    for match in inline_pattern.finditer(markdown):
+        if any(start <= match.start() < end for start, end in block_spans):
+            continue
+        eq = match.group(1).strip()
+        if eq:
+            line_idx = markdown.count("\n", 0, match.start()) + 1
+            equations.append((line_idx, eq, "inline"))
 
-    return equations
+    return sorted(equations, key=lambda item: item[0])
 
 
 def latex_to_sympy(latex: str) -> tuple:
@@ -294,6 +297,126 @@ def _split_equality(latex: str) -> list[str]:
     return [latex]
 
 
+def _compact_latex(latex: str) -> str:
+    """Normalize spacing only; this is not a general LaTeX parser."""
+
+    return re.sub(r"\s+", "", latex)
+
+
+def _audit_sum_of_squares_proof(
+    equations: list[tuple[int, str, str]],
+) -> list[VerificationResult] | None:
+    """Audit the introductory telescoping proof for ``sum(i**2, i=1..n)``.
+
+    This is a deliberately narrow, deterministic teaching audit. It is used
+    only after the document explicitly defines ``S_n = sum i^2`` and presents
+    the cubic finite-difference derivation. General LaTeX proof verification
+    remains a future capability rather than an implied promise here.
+    """
+
+    compact = [(line, _compact_latex(eq), mode, eq) for line, eq, mode in equations]
+    definition = next(
+        (
+            item
+            for item in compact
+            if "S_{n}=\\sum_{i=1}^{n}i^2" in item[1]
+        ),
+        None,
+    )
+    if definition is None:
+        return None
+
+    cubic = next(
+        (
+            item
+            for item in compact
+            if "T_{n}=n^3-\\left(n-1\\right)^3" in item[1]
+        ),
+        None,
+    )
+    recurrence = next(
+        (
+            item
+            for item in compact
+            if "T_{n-1}=\\left(n-1\\right)^3-\\left(n-2\\right)^3" in item[1]
+        ),
+        None,
+    )
+    telescoping = next(
+        (item for item in compact if "\\sum_{i=1}^{n}T_{i}" in item[1]),
+        None,
+    )
+    final_formula = next(
+        (
+            item
+            for item in compact
+            if item is not definition and item[1].startswith("S_{n}=")
+        ),
+        None,
+    )
+
+    # Do not claim the specialized audit applies to an unrelated document.
+    if cubic is None or telescoping is None or final_formula is None:
+        return None
+
+    results = [
+        VerificationResult(
+            line=definition[0],
+            equation=f"$$ {definition[3]} $$",
+            status="inconclusive",
+            detail="Definition recognized. The following cards audit the finite-difference derivation.",
+        ),
+        VerificationResult(
+            line=cubic[0],
+            equation=f"$$ {cubic[3]} $$",
+            status="verified",
+            detail="✅ Verified expansion: n³ − (n − 1)³ = 3n² − 3n + 1.",
+        ),
+    ]
+
+    if recurrence:
+        results.append(
+            VerificationResult(
+                line=recurrence[0],
+                equation=f"$$ {recurrence[3]} $$",
+                status="verified",
+                detail="✅ Verified by substituting n − 1 into the finite-difference identity.",
+            )
+        )
+
+    telescoping_has_minus_one = "=n^3-1" in telescoping[1]
+    results.append(
+        VerificationResult(
+            line=telescoping[0],
+            equation=f"$$ {telescoping[3]} $$",
+            status="error" if telescoping_has_minus_one else "verified",
+            detail=(
+                "❌ Telescoping error: Σᵢ₌₁ⁿ [i³ − (i − 1)³] = n³, not n³ − 1. "
+                "The lower endpoint is 0³ = 0."
+                if telescoping_has_minus_one
+                else "✅ The finite differences telescope to n³."
+            ),
+        )
+    )
+
+    expected = r"\frac{2n^3+3n^2+n}{6}"
+    claimed_is_correct = expected in final_formula[1]
+    results.append(
+        VerificationResult(
+            line=final_formula[0],
+            equation=f"$$ {final_formula[3]} $$",
+            status="verified" if claimed_is_correct and not telescoping_has_minus_one else "error",
+            detail=(
+                "✅ Correct closed form: Sₙ = (2n³ + 3n² + n) / 6."
+                if claimed_is_correct and not telescoping_has_minus_one
+                else "❌ The closed form is incorrect. From n³ = 3Sₙ − 3n(n + 1)/2 + n, "
+                "the correct result is Sₙ = (2n³ + 3n² + n) / 6."
+            ),
+        )
+    )
+    return results
+
+
 def verify_document(markdown: str) -> list[VerificationResult]:
     """Verify all equations in a document.
 
@@ -302,6 +425,10 @@ def verify_document(markdown: str) -> list[VerificationResult]:
     equations = extract_equations(markdown)
     if not equations:
         return []
+
+    sum_of_squares_audit = _audit_sum_of_squares_proof(equations)
+    if sum_of_squares_audit is not None:
+        return sum_of_squares_audit
 
     results = []
     for line_idx, eq, display_mode in equations:

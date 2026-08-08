@@ -6,6 +6,7 @@ import time
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
+from app.compute import execute_plan, plan_from_text
 from app.config import config
 from app.prompts.system import SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_RAG
 from app.rag.retrieve import format_rag_context, retrieve
@@ -198,6 +199,7 @@ async def chat(request: Request):
     suggestion_id = body.get("suggestion_id")
     enable_rag = body.get("enable_rag", True)
     doc_id = body.get("doc_id")
+    locale = body.get("locale", "zh" if any("\u4e00" <= ch <= "\u9fff" for ch in messages[-1].get("content", "")) else "en")
 
     # ── Pre-canned suggestion? Return immediately ──
     if suggestion_id:
@@ -213,6 +215,23 @@ async def chat(request: Request):
 
     # ── Build LLM messages ──
     llm_messages = list(messages)
+    artifacts = []
+    computed_artifact = None
+
+    # P0 automatic computation routing is deliberately conservative. The
+    # planner recognizes only unambiguous, allowlisted operations and passes
+    # typed arguments to handwritten SymPy tools; it never executes model code.
+    try:
+        latest_user_text = next(
+            (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+            "",
+        )
+        artifact = execute_plan(plan_from_text(latest_user_text, locale))
+        if artifact:
+            artifacts.append(artifact.model_dump())
+            computed_artifact = artifact
+    except Exception:
+        logger.exception("Automatic computation routing failed")
 
     # Inject system prompt
     has_system = any(m.get("role") == "system" for m in llm_messages)
@@ -233,6 +252,20 @@ async def chat(request: Request):
                     sys_content = SYSTEM_PROMPT_WITH_RAG + "\n\n" + rag_ctx
 
         llm_messages.insert(0, {"role": "system", "content": sys_content})
+
+    if computed_artifact:
+        llm_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "A deterministic computation has completed. Treat the following "
+                    "artifact as authoritative: do not alter values or claim a stronger "
+                    "verification status. Explain it in the user's language and include "
+                    "the generated Markdown document when appropriate.\n\n"
+                    f"{computed_artifact.model_dump_json()}"
+                ),
+            }
+        )
 
     # Append document context
     if document:
@@ -310,4 +343,5 @@ async def chat(request: Request):
         },
         "elapsed_s": elapsed,
         "snapshot_id": snapshot_id,
+        "artifacts": artifacts,
     }
