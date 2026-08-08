@@ -53,6 +53,7 @@ async def run_code(req: RunRequest):
                 "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
                 "HOME": "/tmp",
                 "PYTHONUNBUFFERED": "1",
+                "MPLBACKEND": "Agg",  # headless matplotlib
                 # Block network access by unsetting proxy vars
                 "HTTP_PROXY": "",
                 "HTTPS_PROXY": "",
