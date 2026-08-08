@@ -459,8 +459,8 @@ def verify_derivation_chain(
 
     for line_idx, eq, mode in equations:
         # Look for "f(x) = ..." or "f\left(x\right) = ..."
-        eq_clean = eq.replace("\\left", "").replace("\\right", "")
-        match = re.match(r"([a-zA-Z])\\s*\\(\\s*([a-zA-Z])\\s*\\)\\s*=\\s*(.+)", eq_clean)
+        eq_clean = eq.replace("\left", "").replace("\right", "").strip()
+        match = re.match(r"([a-zA-Z])\s*\(\s*([a-zA-Z])\s*\)\s*=\s*(.+)", eq_clean)
         if match:
             func_name = match.group(1)
             func_var = match.group(2)
@@ -504,7 +504,7 @@ def verify_derivation_chain(
         if line_idx <= func_line:
             continue  # skip equations before the function definition
 
-        eq_clean = eq.replace("\\left", "").replace("\\right", "").strip()
+        eq_clean = eq.replace("\left", "").replace("\right", "").strip()
 
         # ── Derivative: f'(x) = ... or f''(x) = ... ──
         if re.match(rf"{re.escape(func_name)}\s*'+\s*\(\s*{re.escape(func_var)}\s*\)\s*=", eq_clean):
