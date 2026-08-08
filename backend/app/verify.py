@@ -506,8 +506,8 @@ def verify_derivation_chain(
 
         eq_clean = eq.replace("\\left", "").replace("\\right", "").strip()
 
-        # ── Derivative: f'(x) = ... ──
-        if re.match(rf"{re.escape(func_name)}\s*['']\s*\(\s*{re.escape(func_var)}\s*\)\s*=", eq_clean):
+        # ── Derivative: f'(x) = ... or f''(x) = ... ──
+        if re.match(rf"{re.escape(func_name)}\s*'+\s*\(\s*{re.escape(func_var)}\s*\)\s*=", eq_clean):
             # Determine if it's first or second derivative
             is_second = "'" in eq_clean.split("(")[0] and eq_clean.split("(")[0].count("'") >= 2
             rhs_match = re.search(r"=\s*(.+)", eq_clean)
@@ -571,11 +571,10 @@ def verify_derivation_chain(
             continue
 
         # ── Solution: x = <value> ──
-        if re.match(rf"{re.escape(func_var)}\s*=\s*.+", eq_clean) and prev_context == "solving":
-            rhs_match = re.search(r"=\s*(.+)", eq_clean)
-            if not rhs_match:
-                continue
-            claimed_root = rhs_match.group(1).strip()
+        # Accept both: explicit "set = 0" context AND implicit (just after derivative)
+        x_equals = re.match(rf"{re.escape(func_var)}\s*=\s*(.+)", eq_clean)
+        if x_equals and (prev_context == "solving" or prev_context in ("first_derivative", "second_derivative")):
+            claimed_root = x_equals.group(1).strip()
 
             try:
                 root_val, err = latex_to_sympy(claimed_root)
@@ -617,13 +616,19 @@ def verify_derivation_chain(
                 ))
             continue
 
-        # ── Evaluation: f(<point>) = <value> ──
+        # ── Evaluation: f(<point>) = <expression> = <value> ──
         eval_match = re.match(
             rf"{re.escape(func_name)}\s*\(\s*([^)]+)\s*\)\s*=\s*(.+)", eq_clean
         )
         if eval_match:
             point_str = eval_match.group(1).strip()
-            value_str = eval_match.group(2).strip()
+            rhs_full = eval_match.group(2).strip()
+            # Handle double-equals: f(2) = (x-2)^2+1 = 1
+            # Take only the final value after the last = 
+            if "=" in rhs_full:
+                value_str = rhs_full.rsplit("=", 1)[-1].strip()
+            else:
+                value_str = rhs_full
 
             try:
                 point, _ = latex_to_sympy(point_str)
