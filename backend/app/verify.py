@@ -515,6 +515,22 @@ def verify_derivation_chain(
                 continue
             claimed_rhs = rhs_match.group(1).strip()
 
+            # If RHS is "0" alone, this is "set derivative to zero" → solving, not verifying
+            if claimed_rhs in ("0", "0."):
+                prev_context = "solving"
+                deriv_label = "f''(x)" if is_second else "f'(x)"
+                results.append(VerificationResult(
+                    line=line_idx, equation=f"$$ {eq} $$",
+                    status="verified",
+                    detail=f"🔍 令 {deriv_label} = 0，求解临界点"
+                ))
+                continue
+
+            # Handle inequalities: f''(x) = 2 > 0 → extract just the expression part
+            inequality_match = re.match(r"^(.+?)\s*[><]=?\s*.+$", claimed_rhs)
+            if inequality_match:
+                claimed_rhs = inequality_match.group(1).strip()
+
             try:
                 if is_second:
                     # Second derivative
