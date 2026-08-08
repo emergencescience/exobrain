@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api", tags=["verify"])
 
 class VerifyRequest(BaseModel):
     markdown: str
+    locale: str = "en"
 
 
 class VerifyResult(BaseModel):
@@ -28,7 +29,7 @@ async def verify(req: VerifyRequest):
     if not req.markdown.strip():
         return []
 
-    results = verify_document(req.markdown)
+    results = verify_document(req.markdown, req.locale)
     return [
         VerifyResult(line=r.line, equation=r.equation, status=r.status, detail=r.detail)
         for r in results

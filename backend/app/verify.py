@@ -316,8 +316,13 @@ def _compact_latex(latex: str) -> str:
     return re.sub(r"\s+", "", latex)
 
 
+def _localized(locale: str, en: str, zh: str) -> str:
+    return zh if locale == "zh" else en
+
+
 def _audit_sum_of_squares_proof(
     equations: list[tuple[int, str, str]],
+    locale: str,
 ) -> list[VerificationResult] | None:
     """Audit the introductory telescoping proof for ``sum(i**2, i=1..n)``.
 
@@ -372,28 +377,56 @@ def _audit_sum_of_squares_proof(
     if cubic is None or telescoping is None or final_formula is None:
         return None
 
+    cubic_is_correct = "=3n^2-3n+1" in cubic[1]
     results = [
         VerificationResult(
             line=definition[0],
             equation=f"$$ {definition[3]} $$",
             status="inconclusive",
-            detail="Definition recognized. The following cards audit the finite-difference derivation.",
+            detail=_localized(
+                locale,
+                "Definition recognized. The following cards audit the finite-difference derivation.",
+                "已识别平方和定义。以下卡片将审计有限差分推导。",
+            ),
         ),
         VerificationResult(
             line=cubic[0],
             equation=f"$$ {cubic[3]} $$",
-            status="verified",
-            detail="✅ Verified expansion: n³ − (n − 1)³ = 3n² − 3n + 1.",
+            status="verified" if cubic_is_correct else "error",
+            detail=_localized(
+                locale,
+                "✅ Verified expansion: n³ − (n − 1)³ = 3n² − 3n + 1.",
+                "✅ 已验证展开式：n³ − (n − 1)³ = 3n² − 3n + 1。",
+            )
+            if cubic_is_correct
+            else _localized(
+                locale,
+                "❌ Expansion error: n³ − (n − 1)³ must equal 3n² − 3n + 1.",
+                "❌ 展开错误：n³ − (n − 1)³ 必须等于 3n² − 3n + 1。",
+            ),
         ),
     ]
 
     if recurrence:
+        recurrence_is_correct = "=3\\left(n-1\\right)^2-3\\left(n-1\\right)+1" in recurrence[1]
         results.append(
             VerificationResult(
                 line=recurrence[0],
                 equation=f"$$ {recurrence[3]} $$",
-                status="verified",
-                detail="✅ Verified by substituting n − 1 into the finite-difference identity.",
+                status="verified" if recurrence_is_correct else "error",
+                detail=(
+                    _localized(
+                        locale,
+                        "✅ Verified by substituting n − 1 into the finite-difference identity.",
+                        "✅ 已通过在有限差分恒等式中代入 n − 1 验证。",
+                    )
+                    if recurrence_is_correct
+                    else _localized(
+                        locale,
+                        "❌ Recurrence expansion error: substitute n − 1 into the verified finite-difference identity.",
+                        "❌ 递推展开错误：请在已验证的有限差分恒等式中代入 n − 1。",
+                    )
+                ),
             )
         )
 
@@ -404,10 +437,15 @@ def _audit_sum_of_squares_proof(
             equation=f"$$ {telescoping[3]} $$",
             status="error" if telescoping_has_minus_one else "verified",
             detail=(
-                "❌ Telescoping error: Σᵢ₌₁ⁿ [i³ − (i − 1)³] = n³, not n³ − 1. "
-                "The lower endpoint is 0³ = 0."
+                _localized(
+                    locale,
+                    "❌ Telescoping error: Σᵢ₌₁ⁿ [i³ − (i − 1)³] = n³, not n³ − 1. "
+                    "The lower endpoint is 0³ = 0.",
+                    "❌ 望远镜求和错误：Σᵢ₌₁ⁿ [i³ − (i − 1)³] = n³，而不是 n³ − 1。"
+                    "下端点为 0³ = 0。",
+                )
                 if telescoping_has_minus_one
-                else "✅ The finite differences telescope to n³."
+                else _localized(locale, "✅ The finite differences telescope to n³.", "✅ 有限差分望远镜相消后得到 n³。")
             ),
         )
     )
@@ -420,16 +458,26 @@ def _audit_sum_of_squares_proof(
             equation=f"$$ {final_formula[3]} $$",
             status="verified" if claimed_is_correct and not telescoping_has_minus_one else "error",
             detail=(
-                "✅ Correct closed form: Sₙ = (2n³ + 3n² + n) / 6."
+                _localized(
+                    locale,
+                    "✅ Correct closed form: Sₙ = (2n³ + 3n² + n) / 6.",
+                    "✅ 闭式正确：Sₙ = (2n³ + 3n² + n) / 6。",
+                )
                 if claimed_is_correct and not telescoping_has_minus_one
-                else "❌ The closed form is incorrect. From n³ = 3Sₙ − 3n(n + 1)/2 + n, "
-                "the correct result is Sₙ = (2n³ + 3n² + n) / 6."
+                else _localized(
+                    locale,
+                    "❌ The closed form is incorrect. From n³ = 3Sₙ − 3n(n + 1)/2 + n, "
+                    "the correct result is Sₙ = (2n³ + 3n² + n) / 6.",
+                    "❌ 闭式错误。由 n³ = 3Sₙ − 3n(n + 1)/2 + n 可得，"
+                    "正确结果为 Sₙ = (2n³ + 3n² + n) / 6。",
+                )
             ),
         )
     )
     return results
 
 
+<<<<<<< HEAD
 def verify_derivation_chain(
     equations: list[tuple[int, str, str]], markdown: str
 ) -> list[VerificationResult] | None:
@@ -746,7 +794,7 @@ def verify_derivation_chain(
     return results
 
 
-def verify_document(markdown: str) -> list[VerificationResult]:
+def verify_document(markdown: str, locale: str = "en") -> list[VerificationResult]:
     """Verify all equations in a document.
 
     Returns list of VerificationResult, one per equation.
@@ -757,7 +805,7 @@ def verify_document(markdown: str) -> list[VerificationResult]:
     if not equations:
         return []
 
-    sum_of_squares_audit = _audit_sum_of_squares_proof(equations)
+    sum_of_squares_audit = _audit_sum_of_squares_proof(equations, locale)
     if sum_of_squares_audit is not None:
         return sum_of_squares_audit
 
