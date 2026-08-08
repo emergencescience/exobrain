@@ -477,7 +477,6 @@ def _audit_sum_of_squares_proof(
     return results
 
 
-<<<<<<< HEAD
 def verify_derivation_chain(
     equations: list[tuple[int, str, str]], markdown: str
 ) -> list[VerificationResult] | None:
