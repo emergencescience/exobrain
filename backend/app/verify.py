@@ -8,6 +8,17 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger("exobrain.verify")
 
+# Lazy-load sympy (heavy import; only needed for derivation chain verification)
+_sympy = None
+
+
+def _get_sympy():
+    global _sympy
+    if _sympy is None:
+        import sympy
+        _sympy = sympy
+    return _sympy
+
 
 @dataclass
 class VerificationResult:
@@ -419,333 +430,342 @@ def _audit_sum_of_squares_proof(
     return results
 
 
-# ── Chain verification for calculus derivations ────────────────────
-
-def _normalize(eq: str) -> str:
-    """Remove LaTeX formatting noise for pattern matching."""
-    s = eq.replace("\\left", "").replace("\\right", "")
-    s = re.sub(r"\s+", "", s)
-    return s
-
-
-def _parse_latex_expr(latex: str):
-    """Try to parse a LaTeX fragment as a SymPy expression. Returns (expr, None) or (None, err)."""
-    try:
-        from sympy.parsing.latex import parse_latex
-        return (parse_latex(latex), None)
-    except Exception:
-        try:
-            import sympy as sp
-            conv = _manual_latex_convert(latex)
-            if conv is None:
-                return (None, "Could not convert")
-            return (sp.sympify(conv), None)
-        except Exception as e:
-            return (None, str(e)[:100])
-
-
-def _split_double_equal(eq: str) -> tuple[str | None, str | None, str | None]:
-    """Split A = B = C into (A, B, C). Handles LaTeX groups.
-
-    For f(2) = (2-2)^2 + 1 = 1 → (f(2), (2-2)^2 + 1, 1)
-    For A = B → (A, B, None)
-    """
-    parts = []
-    depth = 0
-    start = 0
-    for i, ch in enumerate(eq):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-        elif ch == "=" and depth == 0:
-            parts.append(eq[start:i].strip())
-            start = i + 1
-    parts.append(eq[start:].strip())
-    if len(parts) == 2:
-        return (parts[0], parts[1], None)
-    elif len(parts) >= 3:
-        return (parts[0], parts[1], parts[-1])
-    return (None, None, None)
-
-
-def _chain_verify_calculus(
-    equations: list[tuple[int, str, str]],
+def verify_derivation_chain(
+    equations: list[tuple[int, str, str]], markdown: str
 ) -> list[VerificationResult] | None:
-    """Chain-verify a single-variable calculus derivation.
+    """Verify a mathematical derivation chain using SymPy symbolic computation.
 
-    Detects the common pattern:
-      f(x) = expr → f'(x) = ... → f'(x) = 0 → x = N →
-      f''(x) = ... → f(N) = M → \\boxed{M}
+    Detects patterns like:
+      1. f(x) = <expression>          → function definition
+      2. f'(x) = <derivative>         → derivative verification
+      3. <equation> = 0 → x = <root>  → solving verification
+      4. f''(x) = <2nd-derivative>    → second derivative
+      5. f(<point>) = <value>         → evaluation verification
 
-    Returns None if the document doesn't match this pattern (falls back to
-    per-equation verification).
+    Uses SymPy to independently compute each step and compare with the
+    user's claimed result. Returns None if no derivation chain is detected.
     """
-    import sympy as sp
+    sp = _get_sympy()
+
+    if len(equations) < 3:
+        return None  # need at least definition + derivative + result
+
+    # ── Step 1: Find function definition ──
+    # Pattern: f(x) = <expression>  or  f\\left(x\\right) = <expression>
+    func_def = None
+    func_var = "x"
+    func_name = "f"
+    func_expr = None
+    func_line = 0
+    func_raw = ""
+
+    for line_idx, eq, mode in equations:
+        # Look for "f(x) = ..." or "f\left(x\right) = ..."
+        eq_clean = eq.replace(r"\left", "").replace(r"\right", "").strip()
+        match = re.match(r"([a-zA-Z])\s*\(\s*([a-zA-Z])\s*\)\s*=\s*(.+)", eq_clean)
+        if match:
+            func_name = match.group(1)
+            func_var = match.group(2)
+            rhs = match.group(3).strip()
+            try:
+                expr, err = latex_to_sympy(rhs)
+                if expr is not None:
+                    func_expr = expr
+                    func_def = eq
+                    func_line = line_idx
+                    func_raw = rhs
+                    break
+            except Exception:
+                pass
+
+    if func_expr is None:
+        return None  # no function definition found
+
+    # Define the SymPy symbols
+    x = sp.Symbol(func_var)
+    f = sp.Function(func_name)(x)
+    f_expr_sympy = func_expr  # the symbolic expression for f(x)
 
     results: list[VerificationResult] = []
-    x = sp.Symbol("x")
-    f_expr: sp.Expr | None = None
-    f_sym: sp.Function | None = None
-    # Track derived facts for cross-checking
-    computed_min_value: tuple[int, sp.Expr] | None = None  # (line, value)
-    computed_min_x: sp.Expr | None = None
-    stage: str = "idle"          # idle | defined | solving | solved | classified
 
-    for line_idx, eq, display_mode in equations:
-        norm = _normalize(eq)
-        display = f"{'$$' if display_mode == 'block' else '$'} {eq} {'$$' if display_mode == 'block' else '$'}"
+    # ── Step 1 result: function definition ──
+    results.append(VerificationResult(
+        line=func_line,
+        equation=f"$$ {func_def} $$",
+        status="verified",
+        detail=f"📐 函数定义：{func_name}({func_var}) = {sp.latex(f_expr_sympy)}"
+    ))
 
-        # ── Pattern 0: f(x) = <expression> (function definition) ──
-        fd_match = re.match(r"f\(x\)=(.+)", norm)
-        if fd_match and stage == "idle":
-            rhs = fd_match.group(1)
-            expr, err = _parse_latex_expr(rhs)
-            if expr is not None:
-                f_expr = expr
-                f_sym = sp.Lambda(x, expr)
-                stage = "defined"
+    # ── Step 2: Walk through subsequent equations ──
+    prev_context: str = "definition"  # track what we're doing
+    solved_value = None
+    first_derivative = None
+    second_derivative = None
+    verified_f_value = None  # Track verified f(x_min) for boxed consistency check
+
+    for line_idx, eq, mode in equations:
+        if line_idx <= func_line:
+            continue  # skip equations before the function definition
+
+        eq_clean = eq.replace(r"\left", "").replace(r"\right", "").strip()
+
+        # ── Derivative: f'(x) = ... or f''(x) = ... ──
+        if re.match(rf"{re.escape(func_name)}\s*'+\s*\(\s*{re.escape(func_var)}\s*\)\s*=", eq_clean):
+            # Determine if it's first or second derivative
+            is_second = "'" in eq_clean.split("(")[0] and eq_clean.split("(")[0].count("'") >= 2
+            rhs_match = re.search(r"=\s*(.+)", eq_clean)
+            if not rhs_match:
+                continue
+            claimed_rhs = rhs_match.group(1).strip()
+
+            # If RHS is "0" alone, this is "set derivative to zero" → solving, not verifying
+            if claimed_rhs in ("0", "0."):
+                prev_context = "solving"
+                deriv_label = "f''(x)" if is_second else "f'(x)"
                 results.append(VerificationResult(
-                    line=line_idx, equation=display,
+                    line=line_idx, equation=f"$$ {eq} $$",
                     status="verified",
-                    detail=f"📐 Function defined: f(x) = {sp.latex(expr)}"
+                    detail=f"🔍 令 {deriv_label} = 0，求解临界点"
                 ))
                 continue
 
-        # ── Pattern 1b: f'(x) = 0 (setting derivative to zero) ──
-        fd1_zero = re.match(r"f'\(x\)=0", norm)
-        if fd1_zero and f_expr is not None:
-            results.append(VerificationResult(
-                line=line_idx, equation=display,
-                status="inconclusive",
-                detail="🔍 Setting f'(x) = 0 to find critical points"
-            ))
-            stage = "solving"
-            continue
+            # Handle inequalities: f''(x) = 2 > 0 → extract just the expression part
+            inequality_match = re.match(r"^(.+?)\s*[><]=?\s*.+$", claimed_rhs)
+            if inequality_match:
+                claimed_rhs = inequality_match.group(1).strip()
 
-        # ── Pattern 1: f'(x) = <expression> (first derivative check) ──
-        fd1_match = re.match(r"f'\(x\)=(.+)", norm)
-        if fd1_match and f_expr is not None:
-            rhs = fd1_match.group(1)
-            user_deriv, _ = _parse_latex_expr(rhs)
-            actual_deriv = sp.diff(f_expr, x)
-            if user_deriv is not None:
-                diff = sp.simplify(user_deriv - actual_deriv)
-                if diff == 0:
-                    stage = "solving" if "=0" in norm else "defined"
-                    results.append(VerificationResult(
-                        line=line_idx, equation=display,
-                        status="verified",
-                        detail=f"✅ First derivative correct: f'(x) = {sp.latex(actual_deriv)}"
-                    ))
+            try:
+                if is_second:
+                    # Second derivative
+                    actual = sp.diff(f_expr_sympy, x, 2)
+                    label = "f''(x)"
+                    prev_context = "second_derivative"
+                    second_derivative = actual
                 else:
-                    results.append(VerificationResult(
-                        line=line_idx, equation=display,
-                        status="error",
-                        detail=f"❌ First derivative mismatch. Yours: {sp.latex(user_deriv)}, "
-                               f"Correct: {sp.latex(actual_deriv)}"
-                    ))
-                continue
+                    # First derivative
+                    actual = sp.diff(f_expr_sympy, x)
+                    label = "f'(x)"
+                    prev_context = "first_derivative"
+                    first_derivative = actual
 
-        # ── Pattern 2: x = <number> (critical point candidate) ──
-        x_eq_match = re.match(r"x=(-?[\d.]+)$", norm)
-        if x_eq_match and stage in ("solving", "defined") and f_expr is not None:
-            candidate = sp.Rational(x_eq_match.group(1))
-            deriv = sp.diff(f_expr, x)
-            solutions = sp.solve(deriv, x)
-            is_solution = any(sp.simplify(candidate - sol) == 0 for sol in (solutions if isinstance(solutions, list) else [solutions]))
-            if is_solution:
-                computed_min_x = candidate
-                stage = "solved"
-                results.append(VerificationResult(
-                    line=line_idx, equation=display,
-                    status="verified",
-                    detail=f"✅ x = {candidate} is a root of f'(x) = 0"
-                ))
-            else:
-                actual_roots = [str(s) for s in (solutions if isinstance(solutions, list) else [solutions])]
-                results.append(VerificationResult(
-                    line=line_idx, equation=display,
-                    status="error",
-                    detail=f"❌ x = {candidate} is NOT a root of f'(x) = 0. "
-                           f"Actual roots: {actual_roots}"
-                ))
-            continue
-
-        # ── Pattern 3: f''(x) = <expression> (second derivative check) ──
-        fd2_match = re.match(r"f''\(x\)=(.+)", norm)
-        if fd2_match and f_expr is not None:
-            rhs = fd2_match.group(1)
-            # If rhs contains >0 or <0, extract just the expression part
-            rhs = re.sub(r"[<>]=?\s*-?\d+.*$", "", rhs).strip()
-            user_deriv2, _ = _parse_latex_expr(rhs)
-            actual_deriv2 = sp.diff(f_expr, x, 2)
-            if user_deriv2 is not None:
-                # Handle inequality like "2 > 0" — check the expression = 2
-                diff2 = sp.simplify(user_deriv2 - actual_deriv2)
-                if diff2 == 0:
-                    # Check sign: if f'' > 0, it's a minimum
-                    if ">0" in norm or "> 0" in eq:
+                claimed, err = latex_to_sympy(claimed_rhs)
+                if claimed is not None:
+                    actual_simplified = sp.simplify(actual)
+                    claimed_simplified = sp.simplify(claimed)
+                    diff_expr = sp.simplify(actual_simplified - claimed_simplified)
+                    if diff_expr == 0:
                         results.append(VerificationResult(
-                            line=line_idx, equation=display,
+                            line=line_idx, equation=f"$$ {eq} $$",
                             status="verified",
-                            detail=f"✅ Second derivative correct: f''(x) = {sp.latex(actual_deriv2)}."
-                                   f" Since f''(x) > 0, this is a local MINIMUM ✓"
+                            detail=f"✅ {label} = {sp.latex(actual_simplified)}，求导正确"
                         ))
-                        stage = "classified"
                     else:
                         results.append(VerificationResult(
-                            line=line_idx, equation=display,
-                            status="verified",
-                            detail=f"✅ Second derivative correct: f''(x) = {sp.latex(actual_deriv2)}"
+                            line=line_idx, equation=f"$$ {eq} $$",
+                            status="error",
+                            detail=f"❌ {label} 应为 {sp.latex(actual_simplified)}，而非 {sp.latex(claimed_simplified)}"
                         ))
                 else:
                     results.append(VerificationResult(
-                        line=line_idx, equation=display,
-                        status="error",
-                        detail=f"❌ Second derivative mismatch. Yours: {sp.latex(user_deriv2)}, "
-                               f"Correct: {sp.latex(actual_deriv2)}"
+                        line=line_idx, equation=f"$$ {eq} $$",
+                        status="error", detail=f"无法解析右侧表达式：{err}"
                     ))
-                continue
-
-        # ── Pattern 4: f(N) = <eval expr> = <result> (evaluation step) ──
-        f_eval_match = re.match(r"f\((-?[\d.]+)\)=.+", norm)
-        if f_eval_match and f_expr is not None:
-            a, b, c = _split_double_equal(eq)
-            if a is None:
-                continue
-
-            # Extract the argument value
-            arg_match = re.match(r"f\((-?[\d.]+)\)", a)
-            if not arg_match:
-                continue
-            arg_val = sp.Rational(arg_match.group(1))
-
-            # The claimed result is the last term
-            claimed_str = c if c else b
-            claimed_str = claimed_str.strip()
-            # Strip LaTeX boxed if present
-            claimed_str = re.sub(r"\\boxed\{(.+)\}", r"\1", claimed_str)
-            try:
-                claimed_val = sp.Rational(claimed_str) if claimed_str.replace('.', '', 1).replace('-', '', 1).isdigit() else sp.sympify(claimed_str)
-            except Exception:
-                claimed_val = None
-
-            # Compute actual f(arg)
-            if f_sym is not None:
-                actual_val = sp.simplify(f_sym(arg_val))
-            else:
-                actual_val = sp.simplify(f_expr.subs(x, arg_val))
-
-            if claimed_val is not None:
-                if sp.simplify(actual_val - claimed_val) == 0:
-                    computed_min_value = (line_idx, actual_val)
-                    results.append(VerificationResult(
-                        line=line_idx, equation=display,
-                        status="verified",
-                        detail=f"✅ f({arg_val}) = {actual_val}. "
-                               f"Second derivative > 0 confirms this is the MINIMUM ✓"
-                        if stage == "classified" else
-                        f"✅ f({arg_val}) = {actual_val}"
-                    ))
-                else:
-                    results.append(VerificationResult(
-                        line=line_idx, equation=display,
-                        status="error",
-                        detail=f"❌ f({arg_val}) should be {actual_val}, not {claimed_val}"
-                    ))
-            else:
-                # Can't parse claimed value, just verify the expression is valid
-                expr_str = b if c else a
-                _, err = _parse_latex_expr(expr_str)
-                if err is None:
-                    results.append(VerificationResult(
-                        line=line_idx, equation=display,
-                        status="verified",
-                        detail=f"✅ f({arg_val}) = {actual_val}"
-                    ))
-                else:
-                    results.append(VerificationResult(
-                        line=line_idx, equation=display,
-                        status="error",
-                        detail=f"Evaluation error: {err}"
-                    ))
+            except Exception as e:
+                results.append(VerificationResult(
+                    line=line_idx, equation=f"$$ {eq} $$",
+                    status="error", detail=f"求导验证失败：{e}"
+                ))
             continue
 
-        # ── Pattern 5: \boxed{value} — consistency check ──
+        # ── Solving: expr = 0 → x = root ──
+        # Pattern: <expression> = 0, followed by x = <value>
+        # OR: f'(x) = 0, x = <value> (may be split across lines)
+        is_equation_to_zero = "=" in eq_clean and (
+            eq_clean.strip().endswith("= 0") or eq_clean.strip().endswith("=0")
+        )
+        if is_equation_to_zero and ("'" in eq_clean or "f" in eq_clean):
+            # This is a "set derivative to zero" equation
+            # We'll verify on the next equation which should be "x = ..."
+            prev_context = "solving"
+            continue
+
+        # ── Solution: x = <value> ──
+        # Accept both: explicit "set = 0" context AND implicit (just after derivative)
+        x_equals = re.match(rf"{re.escape(func_var)}\s*=\s*(.+)", eq_clean)
+        if x_equals and (prev_context == "solving" or prev_context in ("first_derivative", "second_derivative")):
+            claimed_root = x_equals.group(1).strip()
+
+            try:
+                root_val, err = latex_to_sympy(claimed_root)
+                if root_val is not None and first_derivative is not None:
+                    # Verify by solving f'(x) = 0
+                    solutions = sp.solve(first_derivative, x)
+                    found = any(sp.simplify(s - root_val) == 0 for s in (solutions if isinstance(solutions, list) else [solutions]))
+                    if found:
+                        results.append(VerificationResult(
+                            line=line_idx, equation=f"$$ {eq} $$",
+                            status="verified",
+                            detail=f"✅ {func_var} = {sp.latex(root_val)} 是 {func_name}'({func_var})=0 的解"
+                        ))
+                        solved_value = root_val
+                        prev_context = "solved"
+                    else:
+                        results.append(VerificationResult(
+                            line=line_idx, equation=f"$$ {eq} $$",
+                            status="error",
+                            detail=f"❌ {func_name}'({func_var})=0 的解应为 {solutions}，而非 {root_val}"
+                        ))
+                elif root_val is not None:
+                    results.append(VerificationResult(
+                        line=line_idx, equation=f"$$ {eq} $$",
+                        status="verified",
+                        detail=f"✅ {func_var} = {sp.latex(root_val)}"
+                    ))
+                    solved_value = root_val
+                    prev_context = "solved"
+                else:
+                    results.append(VerificationResult(
+                        line=line_idx, equation=f"$$ {eq} $$",
+                        status="error", detail=f"无法解析：{err}"
+                    ))
+            except Exception as e:
+                results.append(VerificationResult(
+                    line=line_idx, equation=f"$$ {eq} $$",
+                    status="error", detail=f"验证失败：{e}"
+                ))
+            continue
+
+        # ── Evaluation: f(<point>) = <expression> = <value> ──
+        eval_match = re.match(
+            rf"{re.escape(func_name)}\s*\(\s*([^)]+)\s*\)\s*=\s*(.+)", eq_clean
+        )
+        if eval_match:
+            point_str = eval_match.group(1).strip()
+            rhs_full = eval_match.group(2).strip()
+            # Handle double-equals: f(2) = (x-2)^2+1 = 1
+            # Take only the final value after the last = 
+            if "=" in rhs_full:
+                value_str = rhs_full.rsplit("=", 1)[-1].strip()
+            else:
+                value_str = rhs_full
+
+            try:
+                point, _ = latex_to_sympy(point_str)
+                claimed_val, _ = latex_to_sympy(value_str)
+                if point is not None and claimed_val is not None:
+                    actual_val = sp.simplify(f_expr_sympy.subs(x, point))
+                    if sp.simplify(actual_val - claimed_val) == 0:
+                        verified_f_value = actual_val  # Track for boxed consistency check
+                        detail = f"✅ {func_name}({sp.latex(point)}) = {sp.latex(actual_val)}，代入正确"
+                        # Add logical check if this is a min/max verification
+                        if prev_context in ("second_derivative", "solved") and second_derivative is not None:
+                            snd_val = second_derivative
+                            if snd_val.is_number or (isinstance(snd_val, sp.Integer)):
+                                if snd_val > 0:
+                                    detail += "；二阶导数 > 0，确认是极小值 ✓"
+                                elif snd_val < 0:
+                                    detail += "；二阶导数 < 0，确认是极大值 ✓"
+                        results.append(VerificationResult(
+                            line=line_idx, equation=f"$$ {eq} $$",
+                            status="verified", detail=detail
+                        ))
+                    else:
+                        results.append(VerificationResult(
+                            line=line_idx, equation=f"$$ {eq} $$",
+                            status="error",
+                            detail=f"❌ {func_name}({sp.latex(point)}) 应为 {sp.latex(actual_val)}，而非 {sp.latex(claimed_val)}"
+                        ))
+                else:
+                    results.append(VerificationResult(
+                        line=line_idx, equation=f"$$ {eq} $$",
+                        status="error", detail="无法解析代入值"
+                    ))
+            except Exception as e:
+                results.append(VerificationResult(
+                    line=line_idx, equation=f"$$ {eq} $$",
+                    status="error", detail=f"代入验证失败：{e}"
+                ))
+            prev_context = "evaluated"
+            continue
+
+        # ── Boxed answer: \boxed{value} — consistency check ──
         boxed_match = re.search(r"\\boxed\{([^}]+)\}", eq)
-        if boxed_match and computed_min_value is not None:
+        if boxed_match and verified_f_value is not None:
             boxed_str = boxed_match.group(1)
-            min_line, min_val = computed_min_value
-            # Try to parse boxed value
             try:
                 # Handle \boxed{1} or \boxed{(2, 1)}
                 if boxed_str.startswith("(") and boxed_str.endswith(")"):
-                    # It's a point like (2, 1) — extract y-coordinate
                     parts = boxed_str.strip("()").split(",")
                     if len(parts) == 2:
                         y_str = parts[1].strip()
-                        boxed_val = sp.Rational(y_str) if y_str.replace('.', '', 1).replace('-', '', 1).isdigit() else sp.sympify(y_str)
+                        boxed_val, _ = latex_to_sympy(y_str)
                     else:
                         boxed_val = None
                 else:
-                    boxed_val = sp.Rational(boxed_str) if boxed_str.replace('.', '', 1).replace('-', '', 1).isdigit() else sp.sympify(boxed_str)
+                    boxed_val, _ = latex_to_sympy(boxed_str)
+                if boxed_val is not None and sp.simplify(boxed_val - verified_f_value) == 0:
+                    results.append(VerificationResult(
+                        line=line_idx, equation=f"$$ {eq} $$",
+                        status="verified",
+                        detail=f"✅ \\boxed 值 {sp.latex(boxed_val)} 与已验证的 f({sp.latex(solved_value)}) = {sp.latex(verified_f_value)} 一致"
+                    ))
+                elif boxed_val is not None:
+                    results.append(VerificationResult(
+                        line=line_idx, equation=f"$$ {eq} $$",
+                        status="error",
+                        detail=f"❌ \\boxed{{{boxed_str}}} 不一致！已验证 f({sp.latex(solved_value)}) = {sp.latex(verified_f_value)}，但 \\boxed 声称 {sp.latex(boxed_val)}"
+                    ))
+                else:
+                    results.append(VerificationResult(
+                        line=line_idx, equation=f"$$ {eq} $$",
+                        status="verified",
+                        detail=f"✅ \\boxed{{{boxed_str}}}（有效表达式）"
+                    ))
             except Exception:
-                boxed_val = None
-
-            if boxed_val is not None and sp.simplify(boxed_val - min_val) == 0:
                 results.append(VerificationResult(
-                    line=line_idx, equation=display,
+                    line=line_idx, equation=f"$$ {eq} $$",
                     status="verified",
-                    detail=f"✅ \\boxed value {boxed_val} is consistent with f({computed_min_x}) = {min_val}"
-                ))
-            elif boxed_val is not None:
-                results.append(VerificationResult(
-                    line=line_idx, equation=display,
-                    status="error",
-                    detail=f"❌ \\boxed{{{boxed_str}}} is INCONSISTENT! "
-                           f"Verified f({computed_min_x}) = {min_val}, but \\boxed claims {boxed_val}"
-                ))
-            else:
-                # Can't parse — just mark as valid expression
-                results.append(VerificationResult(
-                    line=line_idx, equation=display,
-                    status="verified",
-                    detail=f"✅ \\boxed{{{boxed_str}}} (valid expression)"
+                    detail=f"✅ \\boxed{{{boxed_str}}}（有效表达式）"
                 ))
             continue
 
-        # ── Fallback: per-equation verification ──
+        # ── Fallback: standard equation verification ──
         result = verify_equation(eq)
         result.line = line_idx
-        result.equation = display
+        result.equation = f"{'$$' if mode == 'block' else '$'} {eq} {'$$' if mode == 'block' else '$'}"
+        # Enhance the detail for chain context
+        if result.status == "verified" and prev_context in ("solved", "evaluated"):
+            result.detail += "（在推导链中）"
         results.append(result)
 
-    # If we found at least one chain-verified result, return all
-    if any(r.detail.startswith(("📐", "✅", "🔍")) for r in results):
-        return results
-    return None
+    # ── Final check: did we find enough to call this a chain? ──
+    verified_count = sum(1 for r in results if r.status == "verified")
+    if verified_count < 2 or len(results) < 3:
+        return None  # not enough verified steps
+
+    return results
 
 
 def verify_document(markdown: str) -> list[VerificationResult]:
     """Verify all equations in a document.
 
     Returns list of VerificationResult, one per equation.
+    When a derivation chain is detected (function → derivative → solve → evaluate),
+    uses symbolic chain verification instead of isolated equation checking.
     """
     equations = extract_equations(markdown)
     if not equations:
         return []
 
-    # Try specialized audits in order
     sum_of_squares_audit = _audit_sum_of_squares_proof(equations)
     if sum_of_squares_audit is not None:
         return sum_of_squares_audit
 
-    calculus_audit = _chain_verify_calculus(equations)
-    if calculus_audit is not None:
-        return calculus_audit
+    # Try chain verification first
+    chain_results = verify_derivation_chain(equations, markdown)
+    if chain_results is not None:
+        return chain_results
 
-    # Fallback: per-equation verification
     results = []
     for line_idx, eq, display_mode in equations:
         result = verify_equation(eq)
