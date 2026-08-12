@@ -195,6 +195,14 @@ async def chat(request: Request):
 
     model = body.get("model", config.llm_model)
     document = body.get("document")
+    if isinstance(document, str) and len(document) > config.max_document_chars:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Document exceeds the {config.max_document_chars:,}-character V1 limit. "
+                "Select or split a smaller section before asking Exobrain."
+            ),
+        )
     comments = body.get("comments")
     suggestion_id = body.get("suggestion_id")
     enable_rag = body.get("enable_rag", True)

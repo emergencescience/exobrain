@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 
+from app.config import config
 from app.storage import get_storage, StorageProtocol
 
 logger = logging.getLogger("exobrain.documents")
@@ -80,6 +81,14 @@ async def update_document(
     if existing is None or existing.user_id != user_id:
         raise HTTPException(status_code=404, detail="Document not found")
     markdown = req.markdown if req.markdown is not None else existing.markdown
+    if len(markdown) > config.max_document_chars:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Document exceeds the {config.max_document_chars:,}-character V1 limit. "
+                "Split it into a smaller document before saving."
+            ),
+        )
     messages = req.messages if req.messages is not None else existing.messages
     doc = await storage.update_document(doc_id, markdown, messages, title=req.title)
     if doc is None:

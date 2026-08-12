@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from app.storage import Document, Snapshot
 
@@ -52,8 +52,12 @@ class PostgresStorage:
                     document_id TEXT NOT NULL REFERENCES exobrain_documents(id) ON DELETE CASCADE,
                     markdown TEXT NOT NULL DEFAULT '',
                     messages JSONB NOT NULL DEFAULT '[]',
+                    content_hash TEXT NOT NULL DEFAULT '',
+                    verification_results JSONB NOT NULL DEFAULT '[]',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+                ALTER TABLE exobrain_snapshots ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT '';
+                ALTER TABLE exobrain_snapshots ADD COLUMN IF NOT EXISTS verification_results JSONB NOT NULL DEFAULT '[]';
                 CREATE INDEX IF NOT EXISTS idx_exo_docs_user ON exobrain_documents(user_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_exo_snaps_doc ON exobrain_snapshots(document_id, created_at DESC);
             """)
@@ -169,16 +173,35 @@ class PostgresStorage:
 
     # ── Snapshots ─────────────────────────────────────────────────────
 
-    async def save_snapshot(self, doc_id: str, markdown: str, messages: list[dict]) -> Snapshot:
-        snap = Snapshot(document_id=doc_id, markdown=markdown, messages=messages)
+    async def save_snapshot(
+        self,
+        doc_id: str,
+        markdown: str,
+        messages: list[dict],
+        *,
+        content_hash: str = "",
+        verification_results: list[dict] | None = None,
+    ) -> Snapshot:
+        snap = Snapshot(
+            document_id=doc_id,
+            markdown=markdown,
+            messages=messages,
+            content_hash=content_hash,
+            verification_results=verification_results or [],
+        )
         messages_json = json.dumps(messages, ensure_ascii=False)
+        results_json = json.dumps(snap.verification_results, ensure_ascii=False)
         pool = _get_pool()
         conn = pool.getconn()
         try:
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO exobrain_snapshots (id, document_id, markdown, messages) VALUES (%s,%s,%s,%s)",
-                (snap.id, doc_id, markdown, messages_json),
+                """
+                INSERT INTO exobrain_snapshots
+                    (id, document_id, markdown, messages, content_hash, verification_results)
+                VALUES (%s,%s,%s,%s,%s,%s)
+                """,
+                (snap.id, doc_id, markdown, messages_json, content_hash, results_json),
             )
             conn.commit()
             cur.close()
@@ -192,7 +215,10 @@ class PostgresStorage:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT id, document_id, markdown, messages, created_at FROM exobrain_snapshots WHERE document_id=%s ORDER BY created_at DESC",
+                """
+                SELECT id, document_id, markdown, messages, content_hash, verification_results, created_at
+                FROM exobrain_snapshots WHERE document_id=%s ORDER BY created_at DESC
+                """,
                 (doc_id,),
             )
             rows = cur.fetchall()
@@ -201,14 +227,28 @@ class PostgresStorage:
             pool.putconn(conn)
         results = []
         for row in rows:
-            id_, doc_id_, markdown, messages_raw, created_at = row
+            id_, doc_id_, markdown, messages_raw, content_hash, results_raw, created_at = row
             if isinstance(messages_raw, str):
                 messages = json.loads(messages_raw)
             else:
                 messages = messages_raw
+            if isinstance(results_raw, str):
+                verification_results = json.loads(results_raw)
+            else:
+                verification_results = results_raw or []
             if isinstance(created_at, datetime):
                 created_at = created_at.isoformat()
-            results.append(Snapshot(id=id_, document_id=doc_id_, markdown=markdown, messages=messages, created_at=created_at))
+            results.append(
+                Snapshot(
+                    id=id_,
+                    document_id=doc_id_,
+                    markdown=markdown,
+                    messages=messages,
+                    content_hash=content_hash or "",
+                    verification_results=verification_results,
+                    created_at=created_at,
+                )
+            )
         return results
 
     async def restore_snapshot(self, doc_id: str, snapshot_id: str) -> Document | None:

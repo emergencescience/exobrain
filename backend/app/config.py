@@ -38,5 +38,11 @@ class Config:
     # Rate limiting (requests per minute per IP, 0 = disabled)
     rate_limit_rpm: int = field(default_factory=lambda: int(os.getenv("EXOBRAIN_RATE_LIMIT_RPM", "10")))
 
+    # V1 document guardrail. Count Python Unicode code points, which is
+    # predictable for Markdown, LaTeX, Chinese text, and code alike.
+    max_document_chars: int = field(
+        default_factory=lambda: int(os.getenv("EXOBRAIN_MAX_DOCUMENT_CHARS", "30000"))
+    )
+
 
 config = Config()

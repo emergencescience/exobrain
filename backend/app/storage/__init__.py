@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Protocol, runtime_checkable
 
 # ── Models (shared between backends) ──────────────────────────────────
@@ -51,6 +52,8 @@ class Snapshot:
     document_id: str = ""
     markdown: str = ""
     messages: list[dict] = field(default_factory=list)
+    content_hash: str = ""
+    verification_results: list[dict] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
@@ -59,6 +62,8 @@ class Snapshot:
             "document_id": self.document_id,
             "markdown": self.markdown,
             "messages": self.messages,
+            "content_hash": self.content_hash,
+            "verification_results": self.verification_results,
             "created_at": self.created_at,
         }
 
@@ -74,14 +79,20 @@ class StorageProtocol(Protocol):
     async def get_document(self, doc_id: str) -> Document | None: ...
     async def update_document(self, doc_id: str, markdown: str, messages: list[dict], title: str | None = None) -> Document | None: ...
     async def delete_document(self, doc_id: str) -> bool: ...
-    async def save_snapshot(self, doc_id: str, markdown: str, messages: list[dict]) -> Snapshot: ...
+    async def save_snapshot(
+        self,
+        doc_id: str,
+        markdown: str,
+        messages: list[dict],
+        *,
+        content_hash: str = "",
+        verification_results: list[dict] | None = None,
+    ) -> Snapshot: ...
     async def list_snapshots(self, doc_id: str) -> list[Snapshot]: ...
     async def restore_snapshot(self, doc_id: str, snapshot_id: str) -> Document | None: ...
 
 
 # ── Factory ────────────────────────────────────────────────────────────
-
-import os
 
 _storage: StorageProtocol | None = None
 

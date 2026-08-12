@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 
-from app.storage import Document, Snapshot, StorageProtocol
+from app.storage import Document, Snapshot
 
 logger = logging.getLogger("exobrain.storage.sqlite")
 
@@ -41,11 +41,22 @@ class SQLiteStorage:
                     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
                     markdown TEXT NOT NULL DEFAULT '',
                     messages TEXT NOT NULL DEFAULT '[]',
+                    content_hash TEXT NOT NULL DEFAULT '',
+                    verification_results TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_docs_user ON documents(user_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_snaps_doc ON snapshots(document_id, created_at DESC);
             """)
+            snapshot_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()
+            }
+            if "content_hash" not in snapshot_columns:
+                conn.execute("ALTER TABLE snapshots ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''")
+            if "verification_results" not in snapshot_columns:
+                conn.execute(
+                    "ALTER TABLE snapshots ADD COLUMN verification_results TEXT NOT NULL DEFAULT '[]'"
+                )
             conn.commit()
             conn.close()
 
@@ -141,15 +152,34 @@ class SQLiteStorage:
 
     # ── Snapshots ─────────────────────────────────────────────────────
 
-    async def save_snapshot(self, doc_id: str, markdown: str, messages: list[dict]) -> Snapshot:
-        snap = Snapshot(document_id=doc_id, markdown=markdown, messages=messages)
+    async def save_snapshot(
+        self,
+        doc_id: str,
+        markdown: str,
+        messages: list[dict],
+        *,
+        content_hash: str = "",
+        verification_results: list[dict] | None = None,
+    ) -> Snapshot:
+        snap = Snapshot(
+            document_id=doc_id,
+            markdown=markdown,
+            messages=messages,
+            content_hash=content_hash,
+            verification_results=verification_results or [],
+        )
         now = self._now()
         messages_json = json.dumps(messages, ensure_ascii=False)
+        results_json = json.dumps(snap.verification_results, ensure_ascii=False)
         with self._lock:
             conn = sqlite3.connect(self.db_path)
             conn.execute(
-                "INSERT INTO snapshots (id, document_id, markdown, messages, created_at) VALUES (?,?,?,?,?)",
-                (snap.id, doc_id, markdown, messages_json, now),
+                """
+                INSERT INTO snapshots
+                    (id, document_id, markdown, messages, content_hash, verification_results, created_at)
+                VALUES (?,?,?,?,?,?,?)
+                """,
+                (snap.id, doc_id, markdown, messages_json, content_hash, results_json, now),
             )
             conn.commit()
             conn.close()
@@ -160,18 +190,35 @@ class SQLiteStorage:
         with self._lock:
             conn = sqlite3.connect(self.db_path)
             rows = conn.execute(
-                "SELECT id, document_id, markdown, messages, created_at FROM snapshots WHERE document_id=? ORDER BY created_at DESC",
+                """
+                SELECT id, document_id, markdown, messages, content_hash, verification_results, created_at
+                FROM snapshots WHERE document_id=? ORDER BY created_at DESC
+                """,
                 (doc_id,),
             ).fetchall()
             conn.close()
         results = []
         for row in rows:
-            id_, doc_id_, markdown, messages_raw, created_at = row
+            id_, doc_id_, markdown, messages_raw, content_hash, results_raw, created_at = row
             try:
                 messages = json.loads(messages_raw)
             except (json.JSONDecodeError, TypeError):
                 messages = []
-            results.append(Snapshot(id=id_, document_id=doc_id_, markdown=markdown, messages=messages, created_at=created_at))
+            try:
+                verification_results = json.loads(results_raw)
+            except (json.JSONDecodeError, TypeError):
+                verification_results = []
+            results.append(
+                Snapshot(
+                    id=id_,
+                    document_id=doc_id_,
+                    markdown=markdown,
+                    messages=messages,
+                    content_hash=content_hash or "",
+                    verification_results=verification_results,
+                    created_at=created_at,
+                )
+            )
         return results
 
     async def restore_snapshot(self, doc_id: str, snapshot_id: str) -> Document | None:
