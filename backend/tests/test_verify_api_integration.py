@@ -100,3 +100,71 @@ def test_verify_and_document_save_enforce_v1_character_limit(client: TestClient)
 
     assert verify_response.status_code == 413
     assert save_response.status_code == 413
+
+
+def test_snapshot_share_is_public_read_only_and_revocable(client: TestClient):
+    document_id = create_document(client)
+    verified = client.post(
+        "/api/verify",
+        headers={"X-User-Id": "researcher-1"},
+        json={"document_id": document_id, "markdown": "$$x=x$$", "locale": "en"},
+    )
+    snapshot_id = verified.json()["snapshot"]["id"]
+
+    created = client.post(
+        "/api/shares",
+        headers={"X-User-Id": "researcher-1"},
+        json={"document_id": document_id, "snapshot_id": snapshot_id},
+    )
+    assert created.status_code == 200
+    token = created.json()["token"]
+
+    public_read = client.get(f"/api/shares/{token}")
+    assert public_read.status_code == 200
+    assert public_read.json()["snapshot"]["id"] == snapshot_id
+    assert "messages" not in public_read.json()["snapshot"]
+
+    rejected_revoke = client.request(
+        "DELETE",
+        f"/api/shares/{token}",
+        headers={"X-User-Id": "researcher-2"},
+        json={"document_id": document_id},
+    )
+    assert rejected_revoke.status_code == 404
+
+    revoked = client.request(
+        "DELETE",
+        f"/api/shares/{token}",
+        headers={"X-User-Id": "researcher-1"},
+        json={"document_id": document_id},
+    )
+    assert revoked.status_code == 200
+    assert client.get(f"/api/shares/{token}").status_code == 404
+
+
+def test_verify_builds_typed_cross_paragraph_claim_edges(client: TestClient):
+    document_id = create_document(client)
+    markdown = """Assumption: x is real
+
+$$
+f(x) = x^2
+$$
+
+$$
+f'(x) = 2x
+$$
+"""
+    response = client.post(
+        "/api/verify",
+        headers={"X-User-Id": "researcher-1"},
+        json={"document_id": document_id, "markdown": markdown, "locale": "en"},
+    )
+
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assumption = next(result for result in results if result["claim_type"] == "assumption")
+    derivative = next(result for result in results if result["claim_type"] == "differentiation")
+    assert derivative["parent_claim_id"] is not None
+    assert derivative["edge_type"] == "differentiation"
+    assert derivative["assumption_claim_ids"] == [assumption["claim_id"]]
+    assert derivative["crosses_paragraph"] is True

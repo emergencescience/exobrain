@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import uuid
 from datetime import datetime
 
-from app.storage import Document, Snapshot
+from app.storage import Document, Snapshot, SnapshotShare
 
 logger = logging.getLogger("exobrain.storage.postgres")
 
@@ -60,6 +61,13 @@ class PostgresStorage:
                 ALTER TABLE exobrain_snapshots ADD COLUMN IF NOT EXISTS verification_results JSONB NOT NULL DEFAULT '[]';
                 CREATE INDEX IF NOT EXISTS idx_exo_docs_user ON exobrain_documents(user_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_exo_snaps_doc ON exobrain_snapshots(document_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS exobrain_snapshot_shares (
+                    token TEXT PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL REFERENCES exobrain_snapshots(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_exo_snapshot_shares_snapshot
+                    ON exobrain_snapshot_shares(snapshot_id);
             """)
             conn.commit()
             cur.close()
@@ -296,3 +304,75 @@ class PostgresStorage:
         finally:
             pool.putconn(conn)
         return self._row_to_doc(row)
+
+    # ── Read-only snapshot sharing ────────────────────────────────────
+
+    async def create_snapshot_share(self, snapshot_id: str) -> SnapshotShare:
+        share = SnapshotShare(token=secrets.token_urlsafe(24), snapshot_id=snapshot_id)
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO exobrain_snapshot_shares (token, snapshot_id) VALUES (%s,%s)",
+                (share.token, share.snapshot_id),
+            )
+            conn.commit()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        return share
+
+    async def get_shared_snapshot(self, token: str) -> Snapshot | None:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT s.id, s.document_id, s.markdown, s.messages, s.content_hash,
+                       s.verification_results, s.created_at
+                FROM exobrain_snapshot_shares sh
+                JOIN exobrain_snapshots s ON s.id = sh.snapshot_id
+                WHERE sh.token=%s
+                """,
+                (token,),
+            )
+            row = cur.fetchone()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        if row is None:
+            return None
+        id_, doc_id, markdown, messages, content_hash, results, created_at = row
+        if isinstance(messages, str):
+            messages = json.loads(messages)
+        if isinstance(results, str):
+            results = json.loads(results)
+        if isinstance(created_at, datetime):
+            created_at = created_at.isoformat()
+        return Snapshot(
+            id=id_,
+            document_id=doc_id,
+            markdown=markdown,
+            messages=messages or [],
+            content_hash=content_hash or "",
+            verification_results=results or [],
+            created_at=created_at,
+        )
+
+    async def revoke_snapshot_share(self, snapshot_id: str, token: str) -> bool:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM exobrain_snapshot_shares WHERE token=%s AND snapshot_id=%s",
+                (token, snapshot_id),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        return deleted
