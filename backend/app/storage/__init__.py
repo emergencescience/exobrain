@@ -68,6 +68,15 @@ class Snapshot:
         }
 
 
+@dataclass
+class SnapshotShare:
+    """A revocable, opaque capability to read one immutable snapshot."""
+
+    token: str
+    snapshot_id: str
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
 # ── Protocol ──────────────────────────────────────────────────────────
 
 @runtime_checkable
@@ -90,6 +99,9 @@ class StorageProtocol(Protocol):
     ) -> Snapshot: ...
     async def list_snapshots(self, doc_id: str) -> list[Snapshot]: ...
     async def restore_snapshot(self, doc_id: str, snapshot_id: str) -> Document | None: ...
+    async def create_snapshot_share(self, snapshot_id: str) -> SnapshotShare: ...
+    async def get_shared_snapshot(self, token: str) -> Snapshot | None: ...
+    async def revoke_snapshot_share(self, snapshot_id: str, token: str) -> bool: ...
 
 
 # ── Factory ────────────────────────────────────────────────────────────

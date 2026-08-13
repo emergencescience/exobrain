@@ -3,11 +3,12 @@
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import threading
 from datetime import datetime, timezone
 
-from app.storage import Document, Snapshot
+from app.storage import Document, Snapshot, SnapshotShare
 
 logger = logging.getLogger("exobrain.storage.sqlite")
 
@@ -47,6 +48,12 @@ class SQLiteStorage:
                 );
                 CREATE INDEX IF NOT EXISTS idx_docs_user ON documents(user_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_snaps_doc ON snapshots(document_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS snapshot_shares (
+                    token TEXT PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_snapshot_shares_snapshot ON snapshot_shares(snapshot_id);
             """)
             snapshot_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()
@@ -261,3 +268,64 @@ class SQLiteStorage:
             conn.close()
 
         return self._row_to_doc(row)
+
+    # ── Read-only snapshot sharing ────────────────────────────────────
+
+    async def create_snapshot_share(self, snapshot_id: str) -> SnapshotShare:
+        share = SnapshotShare(token=secrets.token_urlsafe(24), snapshot_id=snapshot_id)
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute(
+                "INSERT INTO snapshot_shares (token, snapshot_id, created_at) VALUES (?,?,?)",
+                (share.token, share.snapshot_id, share.created_at),
+            )
+            conn.commit()
+            conn.close()
+        return share
+
+    async def get_shared_snapshot(self, token: str) -> Snapshot | None:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            row = conn.execute(
+                """
+                SELECT s.id, s.document_id, s.markdown, s.messages, s.content_hash,
+                       s.verification_results, s.created_at
+                FROM snapshot_shares sh
+                JOIN snapshots s ON s.id = sh.snapshot_id
+                WHERE sh.token=?
+                """,
+                (token,),
+            ).fetchone()
+            conn.close()
+        if row is None:
+            return None
+        id_, doc_id, markdown, messages_raw, content_hash, results_raw, created_at = row
+        try:
+            messages = json.loads(messages_raw)
+        except (json.JSONDecodeError, TypeError):
+            messages = []
+        try:
+            results = json.loads(results_raw)
+        except (json.JSONDecodeError, TypeError):
+            results = []
+        return Snapshot(
+            id=id_,
+            document_id=doc_id,
+            markdown=markdown,
+            messages=messages,
+            content_hash=content_hash or "",
+            verification_results=results,
+            created_at=created_at,
+        )
+
+    async def revoke_snapshot_share(self, snapshot_id: str, token: str) -> bool:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.execute(
+                "DELETE FROM snapshot_shares WHERE token=? AND snapshot_id=?",
+                (token, snapshot_id),
+            )
+            conn.commit()
+            deleted = cursor.rowcount > 0
+            conn.close()
+        return deleted
