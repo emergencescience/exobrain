@@ -6,6 +6,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import "katex/dist/katex.min.css";
+import CodeRunner, { type ExecutionArtifact } from "@/components/CodeRunner";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -30,10 +31,24 @@ interface Document {
 }
 
 interface VerifyResult {
+  claim_id: string;
   line: number;
+  end_line: number;
   equation: string;
   status: "verified" | "inconclusive" | "error";
   detail: string;
+  claim_type?: string;
+  parent_claim_id?: string | null;
+  edge_type?: string | null;
+  assumption_claim_ids?: string[];
+  crosses_paragraph?: boolean;
+}
+
+interface VerificationSnapshot {
+  id: string;
+  document_id: string;
+  content_hash: string;
+  created_at: string;
 }
 
 // ── Built-in i18n (no external dict dependency for standalone) ───
@@ -227,9 +242,9 @@ function saveState(state: ExobrainState) {
 // ── Settings helpers ──────────────────────────────────────────────
 
 function loadSettings() {
-  if (typeof window === "undefined") return { theme: "dark", lang: "en", llmBaseUrl: "", llmApiKey: "", llmModel: "" };
+  if (typeof window === "undefined") return { theme: "light", lang: "en", llmBaseUrl: "", llmApiKey: "", llmModel: "" };
   return {
-    theme: localStorage.getItem("exobrain_theme") || "dark",
+    theme: localStorage.getItem("exobrain_theme") || "light",
     lang: (localStorage.getItem("exobrain_lang") || "en") as "en" | "zh",
     llmBaseUrl: localStorage.getItem("exobrain_llm_base_url") || "",
     llmApiKey: localStorage.getItem("exobrain_llm_api_key") || "",
@@ -259,9 +274,26 @@ function clearCurrentProject() {
   } catch {}
 }
 
-function splitParagraphs(md: string): { idx: number; text: string }[] {
-  const raw = md.split("\n\n");
-  return raw.map((text, idx) => ({ idx, text: text.trim() })).filter((p) => p.text.length > 0);
+function splitParagraphs(md: string): { idx: number; text: string; startLine: number; endLine: number }[] {
+  const paragraphs: { idx: number; text: string; startLine: number; endLine: number }[] = [];
+  let startLine = 1;
+  let buffer: string[] = [];
+  md.split("\n").forEach((line, index) => {
+    if (!line.trim()) {
+      if (buffer.length) {
+        paragraphs.push({ idx: paragraphs.length, text: buffer.join("\n"), startLine, endLine: index });
+        buffer = [];
+      }
+      startLine = index + 2;
+      return;
+    }
+    if (!buffer.length) startLine = index + 1;
+    buffer.push(line);
+  });
+  if (buffer.length) {
+    paragraphs.push({ idx: paragraphs.length, text: buffer.join("\n"), startLine, endLine: md.split("\n").length });
+  }
+  return paragraphs;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -292,7 +324,10 @@ const rehypePlugins = [rehypeKatex, rehypeRaw];
 
 // ── Component ───────────────────────────────────────────────────────
 
-export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://localhost:8080" }: Props) {
+export default function ExobrainClient({
+  lang = "en",
+  apiBaseUrl = process.env.NEXT_PUBLIC_EXOBRAIN_API_URL || "http://localhost:8080",
+}: Props) {
   const dict = STRINGS[lang] || STRINGS.en;
   const [state, setState] = useState<ExobrainState>(() => loadState(dict));
   const [input, setInput] = useState("");
@@ -305,10 +340,14 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
   const [verifyResults, setVerifyResults] = useState<VerifyResult[] | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [showVerify, setShowVerify] = useState(false);
+  const [showCode, setShowCode] = useState(false);
+  const [verificationSnapshot, setVerificationSnapshot] = useState<VerificationSnapshot | null>(null);
+  const [executionArtifacts, setExecutionArtifacts] = useState<ExecutionArtifact[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // ── Settings & Project state ──────────────────────────────────
   const [settings, setSettings] = useState(loadSettings);
+  const isLight = settings.theme === "light";
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [projects, setProjects] = useState<Document[]>([]);
@@ -512,24 +551,45 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
   const runVerification = async () => {
     setVerifyLoading(true);
     setVerifyResults(null);
+    setVerificationSnapshot(null);
     setShowVerify(true);
+    setShowCode(false);
     // On mobile, switch to verify tab
     setMobileTab("verify");
     try {
       const res = await fetch(`${apiBaseUrl}/api/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markdown: documentMarkdown }),
+        body: JSON.stringify({
+          markdown: documentMarkdown,
+          locale: settings.lang,
+          document_id: currentDocId || undefined,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const results: VerifyResult[] = Array.isArray(data) ? data : data.results || [];
       setVerifyResults(results);
+      setVerificationSnapshot(Array.isArray(data) ? null : data.snapshot || null);
     } catch (err) {
       setVerifyResults([]);
     } finally {
       setVerifyLoading(false);
     }
+  };
+
+  const linkExecutionEvidence = async (claimId: string, artifactId: string) => {
+    if (!verificationSnapshot || !currentDocId) return;
+    await fetch(`${apiBaseUrl}/api/evidence`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        document_id: currentDocId,
+        snapshot_id: verificationSnapshot.id,
+        claim_id: claimId,
+        artifact_id: artifactId,
+      }),
+    });
   };
 
   const copyToClipboard = async () => {
@@ -570,9 +630,9 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
   };
 
   return (
-    <div className="flex flex-col h-screen bg-black text-white overflow-hidden">
+    <div className={`flex h-screen flex-col overflow-hidden ${isLight ? "exobrain-light bg-slate-50 text-slate-900" : "bg-slate-950 text-white"}`}>
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/80 backdrop-blur shrink-0">
+      <header className={`flex shrink-0 items-center justify-between border-b px-4 py-2 backdrop-blur ${isLight ? "border-slate-200 bg-white/90" : "border-white/10 bg-slate-950/80"}`}>
         <div className="flex items-center gap-3">
           <span className="text-lg font-bold bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">
             {currentDocId ? docTitle : dict.play_title}
@@ -609,6 +669,18 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
             {verifyLoading ? "⏳ Verifying..." : "🔬 Verify"}
+          </button>
+          <button
+            onClick={() => {
+              setShowCode(!showCode);
+              setShowVerify(false);
+              setShowSource(false);
+            }}
+            className={`px-3 py-1 text-xs rounded border transition-colors ${
+              showCode ? "border-indigo-400/50 text-indigo-300 bg-indigo-500/10" : "border-white/20 hover:border-indigo-400/50 hover:text-indigo-300"
+            }`}
+          >
+            {"</> Code"}
           </button>
           <button onClick={copyToClipboard} className="px-3 py-1 text-xs rounded border border-white/20 hover:border-purple-400/50 hover:text-purple-300 transition-colors">
             {dict.copy_btn}
@@ -889,7 +961,7 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
         </div>
 
         {/* Right: Preview (55%) */}
-        <div className="hidden md:flex w-[55%] flex-col bg-[#0a0a0a]">
+        <div className={`hidden w-[55%] flex-col md:flex ${isLight ? "bg-slate-50" : "bg-slate-950"}`}>
           <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-2xl mx-auto">
               {showVerify ? (
@@ -932,12 +1004,19 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
                     </div>
                   ) : (
                     <div className="space-y-2">
+                      {verificationSnapshot && (
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <p className="text-[10px] text-white/35">
+                            Snapshot saved · {new Date(verificationSnapshot.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                      )}
                       <div className="flex items-center gap-3 mb-3 px-1">
                         <span className="text-xs text-green-400">✓ {verifyResults.filter(r => r.status === "verified").length}</span>
                         <span className="text-xs text-yellow-400">⚠ {verifyResults.filter(r => r.status === "inconclusive").length}</span>
                         <span className="text-xs text-red-400">✗ {verifyResults.filter(r => r.status === "error").length}</span>
                       </div>
-                      {verifyResults.map((result, i) => {
+                      {verifyResults.map((result) => {
                         const statusIcon = result.status === "verified" ? "✅"
                           : result.status === "inconclusive" ? "⚠️" : "❌";
                         const statusColor = result.status === "verified" ? "border-green-500/30 bg-green-500/5"
@@ -946,16 +1025,44 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
                         const textColor = result.status === "verified" ? "text-green-400"
                           : result.status === "inconclusive" ? "text-yellow-400" : "text-red-400";
                         return (
-                          <div key={i} className={`rounded-lg border p-3 ${statusColor}`}>
+                          <div key={result.claim_id} className={`rounded-lg border p-3 ${statusColor}`}>
                             <div className="flex items-start gap-3">
                               <span className="text-base shrink-0 mt-0.5">{statusIcon}</span>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-3 mb-1.5">
-                                  <span className="text-[10px] text-white/30 font-mono">Line {result.line}</span>
+                                  <span className="text-[10px] text-white/30 font-mono">
+                                    {result.line === result.end_line ? `Line ${result.line}` : `Lines ${result.line}–${result.end_line}`}
+                                  </span>
+                                  <span className="text-[10px] text-white/25 font-mono">{result.claim_id}</span>
                                   <span className={`text-[10px] font-semibold uppercase tracking-wide ${textColor}`}>
                                     {result.status}
                                   </span>
                                 </div>
+                                <p className="mb-1 text-[10px] text-white/35">
+                                  {result.claim_type || "equation"}
+                                  {result.parent_claim_id && ` · ${result.edge_type || "derived from"} ← ${result.parent_claim_id}`}
+                                  {result.crosses_paragraph && " · cross-paragraph"}
+                                </p>
+                                {result.assumption_claim_ids && result.assumption_claim_ids.length > 0 && (
+                                  <p className="mb-1 text-[10px] text-white/35">
+                                    Assumptions: {result.assumption_claim_ids.join(", ")}
+                                  </p>
+                                )}
+                                {verificationSnapshot && executionArtifacts.length > 0 && (
+                                  <div className="mb-2 flex flex-wrap gap-1">
+                                    {executionArtifacts
+                                      .filter((artifact) => artifact.artifact_id)
+                                      .map((artifact) => (
+                                        <button
+                                          key={artifact.artifact_id}
+                                          onClick={() => linkExecutionEvidence(result.claim_id, artifact.artifact_id!)}
+                                          className="rounded border border-indigo-400/30 bg-indigo-400/10 px-2 py-0.5 text-[10px] text-indigo-200 hover:bg-indigo-400/20"
+                                        >
+                                          Link execution · {artifact.artifact_id!.slice(0, 6)}
+                                        </button>
+                                      ))}
+                                  </div>
+                                )}
                                 <div className="text-sm text-white/70 font-mono bg-black/30 rounded px-3 py-1.5 overflow-x-auto whitespace-nowrap">
                                   {result.equation}
                                 </div>
@@ -970,6 +1077,19 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
                     </div>
                   )}
                 </div>
+              ) : showCode ? (
+                <CodeRunner
+                  apiBaseUrl={apiBaseUrl}
+                  documentId={currentDocId}
+                  messages={messages}
+                  onArtifact={(artifact) => {
+                    if (!artifact.artifact_id) return;
+                    setExecutionArtifacts((previous) => [
+                      ...previous.filter((item) => item.artifact_id !== artifact.artifact_id),
+                      artifact,
+                    ]);
+                  }}
+                />
               ) : showSource ? (
                 <pre className="text-xs text-white/60 font-mono whitespace-pre-wrap leading-relaxed bg-white/[0.02] rounded p-4 border border-white/5">
                   {documentMarkdown}
@@ -977,6 +1097,12 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
               ) : (
                 paragraphs.map((para) => {
                   const hasComments = comments[para.idx]?.length > 0;
+                  const issues = (verifyResults || []).filter(
+                    (result) =>
+                      result.status !== "verified" &&
+                      result.line <= para.endLine &&
+                      result.end_line >= para.startLine,
+                  );
                   const isHovered = hoveredPara === para.idx;
                   const isCommenting = commentingPara === para.idx;
                   return (
@@ -986,6 +1112,18 @@ export default function ExobrainClient({ lang = "en", apiBaseUrl = "http://local
                           {para.text}
                         </ReactMarkdown>
                       </div>
+                      {issues.length > 0 && (
+                        <details className="my-1 rounded border border-amber-400/25 bg-amber-400/5 px-2 py-1 text-[11px] text-amber-200">
+                          <summary className="cursor-pointer">
+                            {issues.length} verification issue{issues.length === 1 ? "" : "s"}
+                          </summary>
+                          {issues.map((issue) => (
+                            <p key={issue.claim_id} className="mt-1 text-amber-100/80">
+                              L{issue.line}: {issue.detail}
+                            </p>
+                          ))}
+                        </details>
+                      )}
                       {isHovered && (
                         <div className="absolute -right-2 top-0 translate-x-full flex gap-1 z-10">
                           <button onClick={() => setCommentingPara(para.idx)} className="px-2 py-0.5 text-[10px] rounded bg-white/10 border border-white/20 text-white/60 hover:bg-purple-500/30 hover:text-purple-200 whitespace-nowrap">💬</button>

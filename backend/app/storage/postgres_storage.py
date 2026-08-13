@@ -9,7 +9,13 @@ import secrets
 import uuid
 from datetime import datetime
 
-from app.storage import Document, Snapshot, SnapshotShare
+from app.storage import (
+    ClaimEvidenceLink,
+    Document,
+    ExecutionArtifact,
+    Snapshot,
+    SnapshotShare,
+)
 
 logger = logging.getLogger("exobrain.storage.postgres")
 
@@ -68,6 +74,29 @@ class PostgresStorage:
                 );
                 CREATE INDEX IF NOT EXISTS idx_exo_snapshot_shares_snapshot
                     ON exobrain_snapshot_shares(snapshot_id);
+                CREATE TABLE IF NOT EXISTS exobrain_execution_artifacts (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL REFERENCES exobrain_documents(id) ON DELETE CASCADE,
+                    code TEXT NOT NULL,
+                    code_hash TEXT NOT NULL,
+                    stdout TEXT NOT NULL DEFAULT '',
+                    stderr TEXT NOT NULL DEFAULT '',
+                    exit_code INTEGER NOT NULL,
+                    truncated BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS exobrain_claim_evidence_links (
+                    id TEXT PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL REFERENCES exobrain_snapshots(id) ON DELETE CASCADE,
+                    claim_id TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL REFERENCES exobrain_execution_artifacts(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(snapshot_id, claim_id, artifact_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_exo_execution_artifacts_doc
+                    ON exobrain_execution_artifacts(document_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_exo_claim_evidence_snapshot
+                    ON exobrain_claim_evidence_links(snapshot_id, claim_id);
             """)
             conn.commit()
             cur.close()
@@ -376,3 +405,98 @@ class PostgresStorage:
         finally:
             pool.putconn(conn)
         return deleted
+
+    # ── Execution evidence ────────────────────────────────────────────
+
+    async def save_execution_artifact(self, artifact: ExecutionArtifact) -> ExecutionArtifact:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO exobrain_execution_artifacts
+                    (id, document_id, code, code_hash, stdout, stderr, exit_code, truncated, created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    artifact.id, artifact.document_id, artifact.code, artifact.code_hash,
+                    artifact.stdout, artifact.stderr, artifact.exit_code,
+                    artifact.truncated, artifact.created_at,
+                ),
+            )
+            conn.commit()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        return artifact
+
+    async def get_execution_artifact(self, artifact_id: str) -> ExecutionArtifact | None:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, document_id, code, code_hash, stdout, stderr, exit_code, truncated, created_at
+                FROM exobrain_execution_artifacts WHERE id=%s
+                """,
+                (artifact_id,),
+            )
+            row = cur.fetchone()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        if row is None:
+            return None
+        created_at = row[8].isoformat() if isinstance(row[8], datetime) else row[8]
+        return ExecutionArtifact(
+            id=row[0], document_id=row[1], code=row[2], code_hash=row[3],
+            stdout=row[4], stderr=row[5], exit_code=row[6],
+            truncated=bool(row[7]), created_at=created_at,
+        )
+
+    async def link_claim_evidence(self, link: ClaimEvidenceLink) -> ClaimEvidenceLink:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO exobrain_claim_evidence_links
+                    (id, snapshot_id, claim_id, artifact_id, created_at)
+                VALUES (%s,%s,%s,%s,%s)
+                ON CONFLICT (snapshot_id, claim_id, artifact_id) DO NOTHING
+                """,
+                (link.id, link.snapshot_id, link.claim_id, link.artifact_id, link.created_at),
+            )
+            conn.commit()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        return link
+
+    async def list_claim_evidence(self, snapshot_id: str) -> list[ClaimEvidenceLink]:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, snapshot_id, claim_id, artifact_id, created_at
+                FROM exobrain_claim_evidence_links WHERE snapshot_id=%s ORDER BY created_at
+                """,
+                (snapshot_id,),
+            )
+            rows = cur.fetchall()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        return [
+            ClaimEvidenceLink(
+                id=row[0], snapshot_id=row[1], claim_id=row[2],
+                artifact_id=row[3],
+                created_at=row[4].isoformat() if isinstance(row[4], datetime) else row[4],
+            )
+            for row in rows
+        ]

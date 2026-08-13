@@ -24,6 +24,62 @@ docker-compose up -d
 
 That's it. No auth, no credits, no cloud dependency — just your LLM key and a browser.
 
+## Development and test
+
+The standalone application consists only of `frontend/` and `backend/`. It has no account, credit, or JWT requirement: an absent `X-User-Id` uses the backend's local development namespace.
+
+### 1. Start the FastAPI backend
+
+```bash
+cd backend
+
+# First run: create the project environment and install runtime/test dependencies.
+uv sync --extra test
+
+# Copy/edit .env as needed. An OpenAI-compatible key is optional for canned demos,
+# but needed for live chat.
+export EXOBRAIN_CORS_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8080
+```
+
+RAG is optional and installs the larger `sentence-transformers`/PyTorch stack only when requested:
+
+```bash
+uv sync --extra rag
+```
+
+Confirm it is running:
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+### 2. Start the standalone frontend in a second terminal
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. The frontend directly calls `http://localhost:8080` by default. It offers standalone Markdown editing, LaTeX rendering, document storage, chat, and formula verification.
+
+To use another backend URL, set `NEXT_PUBLIC_EXOBRAIN_API_URL` before starting the frontend.
+
+### Local API and test checks
+
+```bash
+# In backend
+uv run pytest tests/test_verify_api_integration.py
+
+# Example: local direct verification, no JWT required
+curl -X POST http://127.0.0.1:8080/api/verify \
+  -H 'Content-Type: application/json' \
+  -d '{"markdown":"For $x=2$, $x^2=4$.","locale":"en"}'
+```
+
+The direct backend assigns an absent `X-User-Id` to `local`. Do not expose the local development server to an untrusted network.
+
 ## Features
 
 - 🗣️ **Natural language chat** — describe what you want, get a polished paper

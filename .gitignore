@@ -9,3 +9,4 @@ backend/app/data/*.json
 !backend/app/data/mpc_rag.json
 # Ignore SQLite database (runtime artifact)
 backend/app/data/*.db
+.env

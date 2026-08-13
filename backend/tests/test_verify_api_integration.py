@@ -142,6 +142,52 @@ def test_snapshot_share_is_public_read_only_and_revocable(client: TestClient):
     assert client.get(f"/api/shares/{token}").status_code == 404
 
 
+def test_execution_result_can_be_explicitly_linked_to_one_claim(client: TestClient):
+    document_id = create_document(client)
+    headers = {"X-User-Id": "researcher-1"}
+    client.put(
+        f"/api/documents/{document_id}",
+        headers=headers,
+        json={"markdown": "The calculation gives $x=2$."},
+    )
+    verified = client.post(
+        "/api/verify",
+        headers=headers,
+        json={"document_id": document_id, "markdown": "The calculation gives $x=2$."},
+    )
+    assert verified.status_code == 200
+    snapshot = verified.json()["snapshot"]
+    claim_id = snapshot["verification_results"][0]["claim_id"]
+
+    run = client.post(
+        "/api/play/exobrain/run",
+        headers=headers,
+        json={"document_id": document_id, "code": "x = 2\nprint(x)"},
+    )
+    assert run.status_code == 200
+    artifact_id = run.json()["artifact_id"]
+    assert artifact_id
+
+    linked = client.post(
+        "/api/evidence",
+        headers=headers,
+        json={
+            "document_id": document_id,
+            "snapshot_id": snapshot["id"],
+            "claim_id": claim_id,
+            "artifact_id": artifact_id,
+        },
+    )
+    assert linked.status_code == 200
+    assert linked.json()["evidence"]["claim_id"] == claim_id
+
+    evidence = client.get(
+        f"/api/evidence/{snapshot['id']}?document_id={document_id}", headers=headers
+    )
+    assert evidence.status_code == 200
+    assert evidence.json()["evidence"][0]["stdout"] == "2\n"
+
+
 def test_verify_builds_typed_cross_paragraph_claim_edges(client: TestClient):
     document_id = create_document(client)
     markdown = """Assumption: x is real

@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The standalone editor began dark-first. Keep its component markup compatible
+   while making the light theme meet readable contrast requirements. */
+.exobrain-light [class*="text-white/"] {
+  color: rgb(30 41 59 / 0.72) !important;
+}
+
+.exobrain-light .text-white {
+  color: #0f172a !important;
+}
+
+.exobrain-light [class*="bg-white/"] {
+  background-color: rgb(255 255 255 / 0.72);
+}
+
+.exobrain-light [class*="border-white/"] {
+  border-color: rgb(148 163 184 / 0.45);
+}
+
+/* Preserve text contrast for primary actions and dark code surfaces. */
+.exobrain-light .bg-gradient-to-r.text-white,
+.exobrain-light .bg-slate-950.text-white,
+.exobrain-light pre[class*="bg-"] code {
+  color: #fff !important;
+}

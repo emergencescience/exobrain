@@ -77,6 +77,32 @@ class SnapshotShare:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+@dataclass
+class ExecutionArtifact:
+    """A bounded, immutable record of one user-requested code execution."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    document_id: str = ""
+    code: str = ""
+    code_hash: str = ""
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int = 0
+    truncated: bool = False
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+@dataclass
+class ClaimEvidenceLink:
+    """An explicit user-approved link from an execution artifact to one claim."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    snapshot_id: str = ""
+    claim_id: str = ""
+    artifact_id: str = ""
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
 # ── Protocol ──────────────────────────────────────────────────────────
 
 @runtime_checkable
@@ -102,6 +128,10 @@ class StorageProtocol(Protocol):
     async def create_snapshot_share(self, snapshot_id: str) -> SnapshotShare: ...
     async def get_shared_snapshot(self, token: str) -> Snapshot | None: ...
     async def revoke_snapshot_share(self, snapshot_id: str, token: str) -> bool: ...
+    async def save_execution_artifact(self, artifact: ExecutionArtifact) -> ExecutionArtifact: ...
+    async def get_execution_artifact(self, artifact_id: str) -> ExecutionArtifact | None: ...
+    async def link_claim_evidence(self, link: ClaimEvidenceLink) -> ClaimEvidenceLink: ...
+    async def list_claim_evidence(self, snapshot_id: str) -> list[ClaimEvidenceLink]: ...
 
 
 # ── Factory ────────────────────────────────────────────────────────────

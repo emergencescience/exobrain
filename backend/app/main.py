@@ -12,6 +12,7 @@ from app.config import config
 from app.routes.chat import router as chat_router
 from app.routes.compute import router as compute_router
 from app.routes.documents import router as documents_router
+from app.routes.evidence import router as evidence_router
 from app.routes.verify import router as verify_router
 from app.routes.run import router as run_router
 from app.routes.shares import router as shares_router
@@ -38,6 +39,7 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(compute_router)
 app.include_router(documents_router)
+app.include_router(evidence_router)
 app.include_router(verify_router)
 app.include_router(run_router)
 app.include_router(shares_router)

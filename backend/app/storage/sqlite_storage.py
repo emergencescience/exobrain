@@ -8,7 +8,13 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 
-from app.storage import Document, Snapshot, SnapshotShare
+from app.storage import (
+    ClaimEvidenceLink,
+    Document,
+    ExecutionArtifact,
+    Snapshot,
+    SnapshotShare,
+)
 
 logger = logging.getLogger("exobrain.storage.sqlite")
 
@@ -54,6 +60,29 @@ class SQLiteStorage:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_snapshot_shares_snapshot ON snapshot_shares(snapshot_id);
+                CREATE TABLE IF NOT EXISTS execution_artifacts (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    code TEXT NOT NULL,
+                    code_hash TEXT NOT NULL,
+                    stdout TEXT NOT NULL DEFAULT '',
+                    stderr TEXT NOT NULL DEFAULT '',
+                    exit_code INTEGER NOT NULL,
+                    truncated INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS claim_evidence_links (
+                    id TEXT PRIMARY KEY,
+                    snapshot_id TEXT NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+                    claim_id TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL REFERENCES execution_artifacts(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(snapshot_id, claim_id, artifact_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_execution_artifacts_doc
+                    ON execution_artifacts(document_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_claim_evidence_snapshot
+                    ON claim_evidence_links(snapshot_id, claim_id);
             """)
             snapshot_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()
@@ -329,3 +358,92 @@ class SQLiteStorage:
             deleted = cursor.rowcount > 0
             conn.close()
         return deleted
+
+    # ── Execution evidence ────────────────────────────────────────────
+
+    async def save_execution_artifact(self, artifact: ExecutionArtifact) -> ExecutionArtifact:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute(
+                """
+                INSERT INTO execution_artifacts
+                    (id, document_id, code, code_hash, stdout, stderr, exit_code, truncated, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    artifact.id,
+                    artifact.document_id,
+                    artifact.code,
+                    artifact.code_hash,
+                    artifact.stdout,
+                    artifact.stderr,
+                    artifact.exit_code,
+                    int(artifact.truncated),
+                    artifact.created_at,
+                ),
+            )
+            conn.commit()
+            conn.close()
+        return artifact
+
+    async def get_execution_artifact(self, artifact_id: str) -> ExecutionArtifact | None:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            row = conn.execute(
+                """
+                SELECT id, document_id, code, code_hash, stdout, stderr, exit_code, truncated, created_at
+                FROM execution_artifacts WHERE id=?
+                """,
+                (artifact_id,),
+            ).fetchone()
+            conn.close()
+        if row is None:
+            return None
+        return ExecutionArtifact(
+            id=row[0],
+            document_id=row[1],
+            code=row[2],
+            code_hash=row[3],
+            stdout=row[4],
+            stderr=row[5],
+            exit_code=row[6],
+            truncated=bool(row[7]),
+            created_at=row[8],
+        )
+
+    async def link_claim_evidence(self, link: ClaimEvidenceLink) -> ClaimEvidenceLink:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO claim_evidence_links
+                    (id, snapshot_id, claim_id, artifact_id, created_at)
+                VALUES (?,?,?,?,?)
+                """,
+                (link.id, link.snapshot_id, link.claim_id, link.artifact_id, link.created_at),
+            )
+            conn.commit()
+            conn.close()
+        return link
+
+    async def list_claim_evidence(self, snapshot_id: str) -> list[ClaimEvidenceLink]:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            rows = conn.execute(
+                """
+                SELECT id, snapshot_id, claim_id, artifact_id, created_at
+                FROM claim_evidence_links WHERE snapshot_id=? ORDER BY created_at
+                """,
+                (snapshot_id,),
+            ).fetchall()
+            conn.close()
+        return [
+            ClaimEvidenceLink(
+                id=row[0],
+                snapshot_id=row[1],
+                claim_id=row[2],
+                artifact_id=row[3],
+                created_at=row[4],
+            )
+            for row in rows
+        ]
