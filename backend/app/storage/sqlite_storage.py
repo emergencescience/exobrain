@@ -50,6 +50,7 @@ class SQLiteStorage:
                     messages TEXT NOT NULL DEFAULT '[]',
                     content_hash TEXT NOT NULL DEFAULT '',
                     verification_results TEXT NOT NULL DEFAULT '[]',
+                    verification_scope TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_docs_user ON documents(user_id, updated_at DESC);
@@ -92,6 +93,10 @@ class SQLiteStorage:
             if "verification_results" not in snapshot_columns:
                 conn.execute(
                     "ALTER TABLE snapshots ADD COLUMN verification_results TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "verification_scope" not in snapshot_columns:
+                conn.execute(
+                    "ALTER TABLE snapshots ADD COLUMN verification_scope TEXT NOT NULL DEFAULT '{}'"
                 )
             conn.commit()
             conn.close()
@@ -196,6 +201,7 @@ class SQLiteStorage:
         *,
         content_hash: str = "",
         verification_results: list[dict] | None = None,
+        verification_scope: dict | None = None,
     ) -> Snapshot:
         snap = Snapshot(
             document_id=doc_id,
@@ -203,19 +209,21 @@ class SQLiteStorage:
             messages=messages,
             content_hash=content_hash,
             verification_results=verification_results or [],
+            verification_scope=verification_scope or {"kind": "document"},
         )
         now = self._now()
         messages_json = json.dumps(messages, ensure_ascii=False)
         results_json = json.dumps(snap.verification_results, ensure_ascii=False)
+        scope_json = json.dumps(snap.verification_scope, ensure_ascii=False)
         with self._lock:
             conn = sqlite3.connect(self.db_path)
             conn.execute(
                 """
                 INSERT INTO snapshots
-                    (id, document_id, markdown, messages, content_hash, verification_results, created_at)
-                VALUES (?,?,?,?,?,?,?)
+                    (id, document_id, markdown, messages, content_hash, verification_results, verification_scope, created_at)
+                VALUES (?,?,?,?,?,?,?,?)
                 """,
-                (snap.id, doc_id, markdown, messages_json, content_hash, results_json, now),
+                (snap.id, doc_id, markdown, messages_json, content_hash, results_json, scope_json, now),
             )
             conn.commit()
             conn.close()
@@ -227,7 +235,7 @@ class SQLiteStorage:
             conn = sqlite3.connect(self.db_path)
             rows = conn.execute(
                 """
-                SELECT id, document_id, markdown, messages, content_hash, verification_results, created_at
+                SELECT id, document_id, markdown, messages, content_hash, verification_results, verification_scope, created_at
                 FROM snapshots WHERE document_id=? ORDER BY created_at DESC
                 """,
                 (doc_id,),
@@ -235,7 +243,7 @@ class SQLiteStorage:
             conn.close()
         results = []
         for row in rows:
-            id_, doc_id_, markdown, messages_raw, content_hash, results_raw, created_at = row
+            id_, doc_id_, markdown, messages_raw, content_hash, results_raw, scope_raw, created_at = row
             try:
                 messages = json.loads(messages_raw)
             except (json.JSONDecodeError, TypeError):
@@ -244,6 +252,10 @@ class SQLiteStorage:
                 verification_results = json.loads(results_raw)
             except (json.JSONDecodeError, TypeError):
                 verification_results = []
+            try:
+                verification_scope = json.loads(scope_raw)
+            except (json.JSONDecodeError, TypeError):
+                verification_scope = {"kind": "document"}
             results.append(
                 Snapshot(
                     id=id_,
@@ -252,6 +264,7 @@ class SQLiteStorage:
                     messages=messages,
                     content_hash=content_hash or "",
                     verification_results=verification_results,
+                    verification_scope=verification_scope,
                     created_at=created_at,
                 )
             )
@@ -318,7 +331,7 @@ class SQLiteStorage:
             row = conn.execute(
                 """
                 SELECT s.id, s.document_id, s.markdown, s.messages, s.content_hash,
-                       s.verification_results, s.created_at
+                       s.verification_results, s.verification_scope, s.created_at
                 FROM snapshot_shares sh
                 JOIN snapshots s ON s.id = sh.snapshot_id
                 WHERE sh.token=?
@@ -328,7 +341,7 @@ class SQLiteStorage:
             conn.close()
         if row is None:
             return None
-        id_, doc_id, markdown, messages_raw, content_hash, results_raw, created_at = row
+        id_, doc_id, markdown, messages_raw, content_hash, results_raw, scope_raw, created_at = row
         try:
             messages = json.loads(messages_raw)
         except (json.JSONDecodeError, TypeError):
@@ -344,6 +357,7 @@ class SQLiteStorage:
             messages=messages,
             content_hash=content_hash or "",
             verification_results=results,
+            verification_scope=json.loads(scope_raw) if scope_raw else {"kind": "document"},
             created_at=created_at,
         )
 

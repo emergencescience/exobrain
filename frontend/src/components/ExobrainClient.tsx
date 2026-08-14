@@ -61,12 +61,36 @@ interface VerifyResult {
   crosses_paragraph?: boolean;
 }
 
+interface VerificationScope {
+  kind: "document" | "block" | "claim";
+  start_line?: number;
+  end_line?: number;
+  claim_id?: string | null;
+}
+
 interface VerificationSnapshot {
   id: string;
   document_id?: string;
+  markdown?: string;
   content_hash: string;
+  verification_results?: VerifyResult[];
+  verification_scope?: VerificationScope;
   created_at: string;
 }
+
+interface EvidenceLink {
+  id: string;
+  claim_id: string;
+  artifact_id: string;
+  code_hash: string;
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+  created_at: string;
+}
+
+type SourceScope = Required<Pick<VerificationScope, "start_line" | "end_line">> &
+  Pick<VerificationScope, "claim_id"> & { kind: "block" | "claim" };
 
 interface Props {
   lang?: "en" | "zh";
@@ -310,6 +334,17 @@ function editorSelectionStart(markdown: string, line: number) {
   return lines.slice(0, Math.max(0, line - 1)).reduce((total, item) => total + item.length + 1, 0);
 }
 
+function sourceLineAtOffset(markdown: string, offset: number) {
+  return markdown.slice(0, Math.max(0, offset)).split("\n").length;
+}
+
+function scopeLabel(scope: VerificationScope | undefined, lang: "en" | "zh") {
+  if (!scope || scope.kind === "document") return lang === "zh" ? "整篇文档" : "Whole document";
+  const range = `L${scope.start_line}–${scope.end_line}`;
+  if (scope.kind === "claim") return lang === "zh" ? `主张 · ${range}` : `Claim · ${range}`;
+  return lang === "zh" ? `选中区块 · ${range}` : `Selected block · ${range}`;
+}
+
 export default function ExobrainClient({
   lang = "en",
   apiBaseUrl = process.env.NEXT_PUBLIC_EXOBRAIN_API_URL || "http://localhost:8080",
@@ -325,6 +360,11 @@ export default function ExobrainClient({
   const [mobilePane, setMobilePane] = useState<MobilePane>("document");
   const [verifyResults, setVerifyResults] = useState<VerifyResult[]>([]);
   const [verificationSnapshot, setVerificationSnapshot] = useState<VerificationSnapshot | null>(null);
+  const [verificationSnapshots, setVerificationSnapshots] = useState<VerificationSnapshot[]>([]);
+  const [evidenceLinks, setEvidenceLinks] = useState<EvidenceLink[]>([]);
+  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  const [selectedBlock, setSelectedBlock] = useState<SourceScope | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [verifiedMarkdown, setVerifiedMarkdown] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -340,6 +380,49 @@ export default function ExobrainClient({
   const stale = Boolean(verificationSnapshot && verifiedMarkdown !== markdown);
   const verifiedCount = verifyResults.filter((result) => result.status === "verified").length;
   const reviewCount = verifyResults.filter((result) => result.status !== "verified").length;
+
+  const loadEvidence = useCallback(async (documentId: string, snapshotId: string) => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/evidence/${snapshotId}?document_id=${documentId}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setEvidenceLinks(data.evidence || []);
+    } catch {
+      setEvidenceLinks([]);
+    }
+  }, [apiBaseUrl]);
+
+  const activateSnapshot = useCallback(async (documentId: string, snapshot: VerificationSnapshot) => {
+    setVerificationSnapshot(snapshot);
+    setVerifyResults(snapshot.verification_results || []);
+    setVerifiedMarkdown(snapshot.markdown || null);
+    setSelectedClaimId(snapshot.verification_results?.find((item) => item.claim_type !== "assumption")?.claim_id || null);
+    await loadEvidence(documentId, snapshot.id);
+  }, [loadEvidence]);
+
+  const loadReviewContext = useCallback(async (documentId: string, preferredSnapshotId?: string) => {
+    setSnapshotLoading(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/documents/${documentId}/snapshots`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const snapshots = (data.snapshots || []) as VerificationSnapshot[];
+      setVerificationSnapshots(snapshots);
+      const active = snapshots.find((item) => item.id === preferredSnapshotId) || snapshots[0];
+      if (active) await activateSnapshot(documentId, active);
+      else {
+        setVerificationSnapshot(null);
+        setVerifyResults([]);
+        setEvidenceLinks([]);
+        setVerifiedMarkdown(null);
+      }
+    } catch {
+      setVerificationSnapshots([]);
+      setEvidenceLinks([]);
+    } finally {
+      setSnapshotLoading(false);
+    }
+  }, [activateSnapshot, apiBaseUrl]);
 
   const persistDraft = useCallback((nextMarkdown: string, nextMessages: Message[]) => {
     try {
@@ -379,8 +462,13 @@ export default function ExobrainClient({
     setMessages(project.messages || []);
     setVerifyResults([]);
     setVerificationSnapshot(null);
+    setVerificationSnapshots([]);
+    setEvidenceLinks([]);
+    setSelectedClaimId(null);
+    setSelectedBlock(null);
     setVerifiedMarkdown(null);
     setSaveState("saved");
+    void loadReviewContext(project.id);
     setWorkspaceError(null);
     setMobilePane("document");
     try {
@@ -388,7 +476,7 @@ export default function ExobrainClient({
     } catch {
       // Best-effort convenience only.
     }
-  }, [copy]);
+  }, [copy, loadReviewContext]);
 
   const createProject = useCallback(async () => {
     setWorkspaceError(null);
@@ -421,6 +509,10 @@ export default function ExobrainClient({
         setMessages([]);
         setVerifyResults([]);
         setVerificationSnapshot(null);
+        setVerificationSnapshots([]);
+        setEvidenceLinks([]);
+        setSelectedClaimId(null);
+        setSelectedBlock(null);
         setVerifiedMarkdown(null);
       }
     } catch {
@@ -472,20 +564,38 @@ export default function ExobrainClient({
     }, 0);
   };
 
-  const verifyDocument = async () => {
+  const captureSourceSelection = () => {
+    const editor = editorRef.current;
+    if (!editor || editor.selectionStart === editor.selectionEnd) {
+      setSelectedBlock(null);
+      return;
+    }
+    const startLine = sourceLineAtOffset(markdown, editor.selectionStart);
+    const endLine = sourceLineAtOffset(markdown, Math.max(editor.selectionStart, editor.selectionEnd - 1));
+    setSelectedBlock({ kind: "block", start_line: startLine, end_line: endLine });
+  };
+
+  const verifyDocument = async (scope?: SourceScope) => {
     setVerifying(true);
     setWorkspaceError(null);
     try {
       const response = await fetch(`${apiBaseUrl}/api/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ document_id: currentDocId || undefined, markdown, locale: lang }),
+        body: JSON.stringify({ document_id: currentDocId || undefined, markdown, locale: lang, scope }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+      const snapshot = data.snapshot as VerificationSnapshot | null;
       setVerifyResults(data.results || []);
-      setVerificationSnapshot(data.snapshot || null);
+      setVerificationSnapshot(snapshot);
       setVerifiedMarkdown(markdown);
+      setSelectedClaimId(scope?.claim_id || data.results?.find((item: VerifyResult) => item.claim_type !== "assumption")?.claim_id || null);
+      if (snapshot && currentDocId) await loadReviewContext(currentDocId, snapshot.id);
+      else {
+        setEvidenceLinks([]);
+        setVerificationSnapshots(snapshot ? [snapshot] : []);
+      }
       setWorkspaceTab("review");
       setMobilePane("document");
     } catch {
@@ -686,11 +796,14 @@ export default function ExobrainClient({
 
               {workspaceTab === "edit" && (
                 <div className="flex min-h-0 flex-1 flex-col">
-                  <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2 lg:px-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2 lg:px-5">
                     <span className="text-[11px] font-medium text-slate-500">{copy.current}</span>
-                    <span className="text-[11px] text-slate-400">Markdown · LaTeX</span>
+                    <div className="flex items-center gap-2">
+                      {selectedBlock && <button onClick={() => void verifyDocument(selectedBlock)} className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100">{lang === "zh" ? `验证选中区块 L${selectedBlock.start_line}–${selectedBlock.end_line}` : `Verify selection L${selectedBlock.start_line}–${selectedBlock.end_line}`}</button>}
+                      <span className="text-[11px] text-slate-400">Markdown · LaTeX</span>
+                    </div>
                   </div>
-                  <textarea ref={editorRef} value={markdown} onChange={(event) => changeMarkdown(event.target.value)} onBlur={() => void saveDocument()} spellCheck={false} placeholder={copy.editorPlaceholder} className="min-h-[480px] flex-1 resize-none border-0 bg-[#fcfcfd] px-5 py-5 font-mono text-[13px] leading-6 text-slate-700 outline-none placeholder:text-slate-300 lg:px-7" />
+                  <textarea ref={editorRef} value={markdown} onChange={(event) => changeMarkdown(event.target.value)} onSelect={captureSourceSelection} onKeyUp={captureSourceSelection} onBlur={() => { captureSourceSelection(); void saveDocument(); }} spellCheck={false} placeholder={copy.editorPlaceholder} className="min-h-[480px] flex-1 resize-none border-0 bg-[#fcfcfd] px-5 py-5 font-mono text-[13px] leading-6 text-slate-700 outline-none placeholder:text-slate-300 lg:px-7" />
                 </div>
               )}
 
@@ -703,7 +816,7 @@ export default function ExobrainClient({
               )}
 
               {workspaceTab === "review" && (
-                <ReviewPanel copy={copy} results={verifyResults} snapshot={verificationSnapshot} stale={stale} verifying={verifying} onVerify={() => void verifyDocument()} onFocusSource={focusSourceLine} />
+                <ReviewPanel copy={copy} lang={lang} results={verifyResults} snapshots={verificationSnapshots} snapshot={verificationSnapshot} evidenceLinks={evidenceLinks} stale={stale} verifying={verifying} loadingSnapshots={snapshotLoading} selectedClaimId={selectedClaimId} selectedBlock={selectedBlock} onVerify={() => void verifyDocument()} onVerifyClaim={(claim) => void verifyDocument({ kind: "claim", start_line: claim.line, end_line: claim.end_line, claim_id: claim.claim_id })} onVerifyBlock={() => selectedBlock && void verifyDocument(selectedBlock)} onSelectClaim={setSelectedClaimId} onFocusSource={focusSourceLine} onSelectSnapshot={(snapshot) => currentDocId && void activateSnapshot(currentDocId, snapshot)} />
               )}
             </>
           )}
@@ -774,36 +887,81 @@ function EmptyDocumentState({ copy, onCreate }: { copy: Copy; onCreate: () => vo
 
 function ReviewPanel({
   copy,
+  lang,
   results,
+  snapshots,
   snapshot,
+  evidenceLinks,
   stale,
   verifying,
+  loadingSnapshots,
+  selectedClaimId,
+  selectedBlock,
   onVerify,
+  onVerifyClaim,
+  onVerifyBlock,
+  onSelectClaim,
   onFocusSource,
+  onSelectSnapshot,
 }: {
   copy: Copy;
+  lang: "en" | "zh";
   results: VerifyResult[];
+  snapshots: VerificationSnapshot[];
   snapshot: VerificationSnapshot | null;
+  evidenceLinks: EvidenceLink[];
   stale: boolean;
   verifying: boolean;
+  loadingSnapshots: boolean;
+  selectedClaimId: string | null;
+  selectedBlock: SourceScope | null;
   onVerify: () => void;
+  onVerifyClaim: (claim: VerifyResult) => void;
+  onVerifyBlock: () => void;
+  onSelectClaim: (claimId: string) => void;
   onFocusSource: (line: number) => void;
+  onSelectSnapshot: (snapshot: VerificationSnapshot) => void;
 }) {
+  const [view, setView] = useState<"claims" | "graph" | "evidence">("claims");
   const verified = results.filter((result) => result.status === "verified").length;
   const needsReview = results.length - verified;
+  const evidenceByClaim = results.reduce<Record<string, EvidenceLink[]>>((accumulator, result) => {
+    accumulator[result.claim_id] = evidenceLinks.filter((item) => item.claim_id === result.claim_id);
+    return accumulator;
+  }, {});
+  const labels = lang === "zh"
+    ? { claims: "主张", graph: "关系图", evidence: "执行证据", history: "快照历史", scope: "验证范围", source: "在源码中查看", selected: "验证该主张", block: "验证选中区块", noEvidence: "这个快照中还没有关联的执行证据。", noGraph: "尚未提取可显示的主张关系。", execution: "执行结果", parent: "上游主张", assumptions: "依赖假设" }
+    : { claims: "Claims", graph: "Claim graph", evidence: "Execution evidence", history: "Snapshot history", scope: "Verification scope", source: "View source", selected: "Verify this claim", block: "Verify selected block", noEvidence: "No execution evidence is linked to this snapshot yet.", noGraph: "No claim relationships were extracted for this snapshot.", execution: "Execution result", parent: "Upstream claim", assumptions: "Assumptions" };
+  const selectedClaim = results.find((item) => item.claim_id === selectedClaimId) || null;
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-[#fcfcfd] p-4 lg:p-5">
       <div className="mx-auto max-w-4xl">
-        <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div>
-            <p className="text-sm font-semibold text-slate-800">{copy.reviewSummary}</p>
-            {snapshot ? <p className="mt-1 text-xs text-slate-500">{copy.snapshot} · {formatDate(snapshot.created_at)}</p> : <p className="mt-1 text-xs text-slate-500">{copy.noVerification}</p>}
-            {stale && <p className="mt-2 inline-flex rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">{copy.stale}</p>}
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">{copy.reviewSummary}</p>
+              <p className="mt-1 text-xs text-slate-500">{snapshot ? `${copy.snapshot} · ${formatDate(snapshot.created_at, lang)}` : copy.noVerification}</p>
+              {stale && <p className="mt-2 inline-flex rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800">{copy.stale}</p>}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedBlock && <button onClick={onVerifyBlock} disabled={verifying} className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:opacity-50">{labels.block}</button>}
+              <button onClick={onVerify} disabled={verifying} className="rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50">{verifying ? copy.working : snapshot ? copy.rerunVerification : copy.runVerification}</button>
+            </div>
           </div>
-          <button onClick={onVerify} disabled={verifying} className="rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50">
-            {verifying ? copy.working : snapshot ? copy.rerunVerification : copy.runVerification}
-          </button>
+          <div className="mt-4 grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <label className="block text-[11px] font-medium text-slate-500">
+              {labels.history}
+              <select value={snapshot?.id || ""} onChange={(event) => { const next = snapshots.find((item) => item.id === event.target.value); if (next) onSelectSnapshot(next); }} disabled={loadingSnapshots || snapshots.length === 0} className="mt-1.5 block w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none focus:border-indigo-300">
+                {!snapshots.length && <option value="">{loadingSnapshots ? copy.loading : copy.noVerification}</option>}
+                {snapshots.map((item) => <option key={item.id} value={item.id}>{formatDate(item.created_at, lang)} · {scopeLabel(item.verification_scope, lang)} · {item.verification_results?.length || 0}</option>)}
+              </select>
+            </label>
+            <div className="text-[11px] font-medium text-slate-500">
+              {labels.scope}
+              <p className="mt-1.5 rounded-md border border-slate-100 bg-slate-50 px-2.5 py-2 text-xs font-normal text-slate-700">{scopeLabel(snapshot?.verification_scope, lang)}</p>
+            </div>
+          </div>
         </div>
 
         {results.length === 0 ? (
@@ -813,38 +971,55 @@ function ReviewPanel({
           </div>
         ) : (
           <>
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <SummaryCard label={copy.claims} value={String(results.length)} detail={copy.reviewSummary} />
               <SummaryCard label={copy.verifiedCount} value={String(verified)} detail={`${Math.round((verified / Math.max(results.length, 1)) * 100)}%`} tone="emerald" />
               <SummaryCard label={copy.issueCount} value={String(needsReview)} detail={stale ? copy.stale : copy.current} tone={needsReview ? "amber" : "slate"} />
+              <SummaryCard label={labels.evidence} value={String(evidenceLinks.length)} detail={snapshot ? labels.execution : "—"} tone={evidenceLinks.length ? "emerald" : "slate"} />
             </div>
-            <div className="mt-4 space-y-3">
+
+            <div className="mt-4 flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
+              {(["claims", "graph", "evidence"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition ${view === item ? "bg-indigo-50 text-indigo-700" : "text-slate-500 hover:text-slate-800"}`}>{item === "claims" ? labels.claims : item === "graph" ? labels.graph : labels.evidence}</button>)}
+            </div>
+
+            {view === "claims" && <div className="mt-4 space-y-3">
               {results.map((result) => {
                 const meta = statusMeta(result.status, copy);
-                return (
-                  <article key={result.claim_id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ${meta.className}`}><span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}</span>
-                          <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">{result.claim_type || copy.claim}</span>
-                        </div>
-                        <div className="mt-3 overflow-x-auto rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700"><span className="text-slate-400">{copy.claim}: </span>{displayEquation(result.equation)}</div>
-                        <p className="mt-3 text-xs leading-5 text-slate-600">{result.detail}</p>
-                        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-400">
-                          <span>{copy.sourceRange} L{result.line}{result.end_line !== result.line ? `–${result.end_line}` : ""}</span>
-                          {result.assumption_claim_ids?.length ? <span>{result.assumption_claim_ids.length} {copy.assumptions}</span> : null}
-                          {result.parent_claim_id ? <span>{copy.provenance}</span> : null}
-                        </div>
-                      </div>
-                      <button onClick={() => onFocusSource(result.line)} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700">{copy.sourceRange}</button>
+                const selected = result.claim_id === selectedClaimId;
+                const linked = evidenceByClaim[result.claim_id] || [];
+                return <article key={result.claim_id} onClick={() => onSelectClaim(result.claim_id)} className={`cursor-pointer rounded-xl border bg-white p-4 shadow-sm transition ${selected ? "border-indigo-300 ring-2 ring-indigo-100" : "border-slate-200 hover:border-slate-300"}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ${meta.className}`}><span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}</span><span className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">{result.claim_type || copy.claim}</span>{linked.length > 0 && <span className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-700">{linked.length} {labels.evidence}</span>}</div>
+                      <div className="mt-3 overflow-x-auto rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700"><span className="text-slate-400">{copy.claim}: </span>{displayEquation(result.equation)}</div>
+                      <p className="mt-3 text-xs leading-5 text-slate-600">{result.detail}</p>
+                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-400"><span>{copy.sourceRange} L{result.line}{result.end_line !== result.line ? `–${result.end_line}` : ""}</span>{result.assumption_claim_ids?.length ? <span>{result.assumption_claim_ids.length} {copy.assumptions}</span> : null}{result.parent_claim_id ? <span>{copy.provenance}</span> : null}</div>
                     </div>
-                  </article>
-                );
+                    <div className="flex shrink-0 flex-wrap gap-2"><button onClick={(event) => { event.stopPropagation(); onVerifyClaim(result); }} disabled={verifying} className="rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">{labels.selected}</button><button onClick={(event) => { event.stopPropagation(); onFocusSource(result.line); }} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700">{labels.source}</button></div>
+                  </div>
+                </article>;
               })}
-            </div>
+            </div>}
+
+            {view === "graph" && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              {results.length === 0 ? <p className="text-xs text-slate-500">{labels.noGraph}</p> : <div className="space-y-2">{results.map((result, index) => {
+                const parent = results.find((item) => item.claim_id === result.parent_claim_id);
+                const assumptions = results.filter((item) => result.assumption_claim_ids?.includes(item.claim_id));
+                const selected = result.claim_id === selectedClaimId;
+                return <div key={result.claim_id} className="flex gap-3"><div className="flex w-6 flex-col items-center">{index > 0 && <span className="h-3 w-px bg-slate-300" />}<button onClick={() => onSelectClaim(result.claim_id)} className={`h-4 w-4 rounded-full border-2 ${selected ? "border-indigo-600 bg-indigo-100" : "border-slate-300 bg-white"}`} aria-label={result.claim_id} /><span className="min-h-3 w-px flex-1 bg-slate-300" /></div><div className={`mb-2 min-w-0 flex-1 rounded-lg border p-3 ${selected ? "border-indigo-200 bg-indigo-50/40" : "border-slate-200"}`}><div className="flex items-center justify-between gap-3"><button onClick={() => onSelectClaim(result.claim_id)} className="min-w-0 truncate text-left text-xs font-semibold text-slate-700">{result.claim_type || copy.claim} · L{result.line}</button><button onClick={() => onFocusSource(result.line)} className="text-[10px] font-medium text-indigo-600">{labels.source}</button></div><p className="mt-1 truncate font-mono text-[11px] text-slate-500">{displayEquation(result.equation)}</p>{parent && <p className="mt-2 text-[10px] text-slate-500">{labels.parent}: {parent.claim_type} · L{parent.line}</p>}{assumptions.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{assumptions.map((item) => <button key={item.claim_id} onClick={() => onSelectClaim(item.claim_id)} className="rounded bg-amber-50 px-1.5 py-1 text-[10px] text-amber-800">{labels.assumptions}: L{item.line}</button>)}</div>}</div></div>;
+              })}</div>}
+            </div>}
+
+            {view === "evidence" && <div className="mt-4 space-y-3">
+              {!evidenceLinks.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs leading-5 text-slate-500">{labels.noEvidence}</div> : evidenceLinks.map((evidence) => {
+                const claim = results.find((item) => item.claim_id === evidence.claim_id);
+                return <article key={evidence.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold text-slate-700">{labels.execution}</p><p className="mt-1 text-[10px] text-slate-500">{claim ? `${copy.claim} · L${claim.line}` : evidence.claim_id} · {formatDate(evidence.created_at, lang)}</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${evidence.exit_code === 0 ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>{evidence.exit_code === 0 ? copy.verified : copy.error}</span></div><p className="mt-3 break-all font-mono text-[10px] text-slate-400">SHA-256 {evidence.code_hash}</p>{evidence.stdout && <pre className="mt-3 max-h-44 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{evidence.stdout}</pre>}{evidence.stderr && <pre className="mt-3 max-h-44 overflow-auto rounded-lg bg-rose-50 p-3 text-xs text-rose-900">{evidence.stderr}</pre>}{claim && <button onClick={() => { onSelectClaim(claim.claim_id); onFocusSource(claim.line); }} className="mt-3 text-xs font-semibold text-indigo-600">{labels.source}</button>}</article>;
+              })}
+            </div>}
           </>
         )}
+
+        {selectedClaim && <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-xs text-indigo-800">{lang === "zh" ? "当前选中主张：" : "Selected claim: "}<span className="font-mono">{selectedClaim.claim_id}</span></div>}
       </div>
     </div>
   );
