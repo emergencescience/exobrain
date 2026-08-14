@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from app.config import config
+from app.proof_fragments import build_proof_graph
 from app.storage import StorageProtocol, get_storage
 from app.verify import verify_document
 
@@ -203,6 +204,7 @@ async def verify(
             previous_end_line = end_line
 
     scope_metadata = _scope_metadata(req.scope)
+    proof_graph = build_proof_graph(req.markdown, [result.model_dump() for result in results])
     snapshot = None
     if document is not None:
         snapshot = await storage.save_snapshot(
@@ -212,9 +214,11 @@ async def verify(
             content_hash=content_hash,
             verification_results=[result.model_dump() for result in results],
             verification_scope=scope_metadata,
+            proof_graph=proof_graph,
         )
     return {
         "results": [result.model_dump() for result in results],
         "snapshot": snapshot.to_dict() if snapshot else None,
         "scope": scope_metadata,
+        "proof_graph": proof_graph,
     }

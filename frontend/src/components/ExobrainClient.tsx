@@ -68,6 +68,42 @@ interface VerificationScope {
   claim_id?: string | null;
 }
 
+interface ProofStep {
+  id: string;
+  kind: "assumption" | "definition" | "statement" | "derivation_step" | "theorem_application" | "conclusion";
+  text: string;
+  source: { start_line: number; end_line: number };
+  local_status: "locally_verified" | "partially_checked" | "inconclusive" | "failed" | "not_checked";
+  fragment_id: string;
+}
+interface ProofDependency {
+  id: string;
+  from_step_id: string;
+  to_step_id: string;
+  kind: "derives" | "requires_assumption";
+  edge_status: "not_checked" | "declared" | "verified" | "verified_under_assumptions" | "failed";
+  reason: string;
+  validator?: {
+    id: string;
+    label: string;
+    status: "verified" | "verified_under_assumptions";
+    method: string;
+    evidence: Record<string, string | string[]>;
+  };
+}
+interface ProofFragment {
+  id: string;
+  title: string;
+  kind: "assumptions" | "claim" | "derivation" | "context";
+  source: { start_line: number; end_line: number };
+  steps: ProofStep[];
+}
+interface ProofGraph {
+  schema_version: string;
+  fragments: ProofFragment[];
+  dependencies: ProofDependency[];
+  limitations?: string[];
+}
 interface VerificationSnapshot {
   id: string;
   document_id?: string;
@@ -75,6 +111,7 @@ interface VerificationSnapshot {
   content_hash: string;
   verification_results?: VerifyResult[];
   verification_scope?: VerificationScope;
+  proof_graph?: ProofGraph;
   created_at: string;
 }
 
@@ -816,7 +853,7 @@ export default function ExobrainClient({
               )}
 
               {workspaceTab === "review" && (
-                <ReviewPanel copy={copy} lang={lang} results={verifyResults} snapshots={verificationSnapshots} snapshot={verificationSnapshot} evidenceLinks={evidenceLinks} stale={stale} verifying={verifying} loadingSnapshots={snapshotLoading} selectedClaimId={selectedClaimId} selectedBlock={selectedBlock} onVerify={() => void verifyDocument()} onVerifyClaim={(claim) => void verifyDocument({ kind: "claim", start_line: claim.line, end_line: claim.end_line, claim_id: claim.claim_id })} onVerifyBlock={() => selectedBlock && void verifyDocument(selectedBlock)} onSelectClaim={setSelectedClaimId} onFocusSource={focusSourceLine} onSelectSnapshot={(snapshot) => currentDocId && void activateSnapshot(currentDocId, snapshot)} />
+                <ReviewPanel copy={copy} lang={lang} results={verifyResults} snapshots={verificationSnapshots} snapshot={verificationSnapshot} proofGraph={verificationSnapshot?.proof_graph} evidenceLinks={evidenceLinks} stale={stale} verifying={verifying} loadingSnapshots={snapshotLoading} selectedClaimId={selectedClaimId} selectedBlock={selectedBlock} onVerify={() => void verifyDocument()} onVerifyClaim={(claim) => void verifyDocument({ kind: "claim", start_line: claim.line, end_line: claim.end_line, claim_id: claim.claim_id })} onVerifyBlock={() => selectedBlock && void verifyDocument(selectedBlock)} onSelectClaim={setSelectedClaimId} onFocusSource={focusSourceLine} onSelectSnapshot={(snapshot) => currentDocId && void activateSnapshot(currentDocId, snapshot)} />
               )}
             </>
           )}
@@ -891,6 +928,7 @@ function ReviewPanel({
   results,
   snapshots,
   snapshot,
+  proofGraph,
   evidenceLinks,
   stale,
   verifying,
@@ -909,6 +947,7 @@ function ReviewPanel({
   results: VerifyResult[];
   snapshots: VerificationSnapshot[];
   snapshot: VerificationSnapshot | null;
+  proofGraph?: ProofGraph;
   evidenceLinks: EvidenceLink[];
   stale: boolean;
   verifying: boolean;
@@ -930,8 +969,8 @@ function ReviewPanel({
     return accumulator;
   }, {});
   const labels = lang === "zh"
-    ? { claims: "主张", graph: "关系图", evidence: "执行证据", history: "快照历史", scope: "验证范围", source: "在源码中查看", selected: "验证该主张", block: "验证选中区块", noEvidence: "这个快照中还没有关联的执行证据。", noGraph: "尚未提取可显示的主张关系。", execution: "执行结果", parent: "上游主张", assumptions: "依赖假设" }
-    : { claims: "Claims", graph: "Claim graph", evidence: "Execution evidence", history: "Snapshot history", scope: "Verification scope", source: "View source", selected: "Verify this claim", block: "Verify selected block", noEvidence: "No execution evidence is linked to this snapshot yet.", noGraph: "No claim relationships were extracted for this snapshot.", execution: "Execution result", parent: "Upstream claim", assumptions: "Assumptions" };
+    ? { claims: "主张", graph: "证明依赖图", evidence: "执行证据", history: "快照历史", scope: "验证范围", source: "在源码中查看", selected: "验证该主张", block: "验证选中区块", noEvidence: "这个快照中还没有关联的执行证据。", noGraph: "尚未提取可显示的证明依赖。", execution: "执行结果", parent: "上游主张", assumptions: "依赖假设" }
+    : { claims: "Claims", graph: "Proof dependency graph", evidence: "Execution evidence", history: "Snapshot history", scope: "Verification scope", source: "View source", selected: "Verify this claim", block: "Verify selected block", noEvidence: "No execution evidence is linked to this snapshot yet.", noGraph: "No proof dependencies were extracted for this snapshot.", execution: "Execution result", parent: "Upstream claim", assumptions: "Assumptions" };
   const selectedClaim = results.find((item) => item.claim_id === selectedClaimId) || null;
 
   return (
@@ -1002,14 +1041,8 @@ function ReviewPanel({
             </div>}
 
             {view === "graph" && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              {results.length === 0 ? <p className="text-xs text-slate-500">{labels.noGraph}</p> : <div className="space-y-2">{results.map((result, index) => {
-                const parent = results.find((item) => item.claim_id === result.parent_claim_id);
-                const assumptions = results.filter((item) => result.assumption_claim_ids?.includes(item.claim_id));
-                const selected = result.claim_id === selectedClaimId;
-                return <div key={result.claim_id} className="flex gap-3"><div className="flex w-6 flex-col items-center">{index > 0 && <span className="h-3 w-px bg-slate-300" />}<button onClick={() => onSelectClaim(result.claim_id)} className={`h-4 w-4 rounded-full border-2 ${selected ? "border-indigo-600 bg-indigo-100" : "border-slate-300 bg-white"}`} aria-label={result.claim_id} /><span className="min-h-3 w-px flex-1 bg-slate-300" /></div><div className={`mb-2 min-w-0 flex-1 rounded-lg border p-3 ${selected ? "border-indigo-200 bg-indigo-50/40" : "border-slate-200"}`}><div className="flex items-center justify-between gap-3"><button onClick={() => onSelectClaim(result.claim_id)} className="min-w-0 truncate text-left text-xs font-semibold text-slate-700">{result.claim_type || copy.claim} · L{result.line}</button><button onClick={() => onFocusSource(result.line)} className="text-[10px] font-medium text-indigo-600">{labels.source}</button></div><p className="mt-1 truncate font-mono text-[11px] text-slate-500">{displayEquation(result.equation)}</p>{parent && <p className="mt-2 text-[10px] text-slate-500">{labels.parent}: {parent.claim_type} · L{parent.line}</p>}{assumptions.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{assumptions.map((item) => <button key={item.claim_id} onClick={() => onSelectClaim(item.claim_id)} className="rounded bg-amber-50 px-1.5 py-1 text-[10px] text-amber-800">{labels.assumptions}: L{item.line}</button>)}</div>}</div></div>;
-              })}</div>}
+              {proofGraph?.fragments?.length ? <ProofDependencyGraph graph={proofGraph} lang={lang} onFocusSource={onFocusSource} /> : <p className="text-xs leading-5 text-slate-500">{labels.noGraph}</p>}
             </div>}
-
             {view === "evidence" && <div className="mt-4 space-y-3">
               {!evidenceLinks.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs leading-5 text-slate-500">{labels.noEvidence}</div> : evidenceLinks.map((evidence) => {
                 const claim = results.find((item) => item.claim_id === evidence.claim_id);
@@ -1023,6 +1056,53 @@ function ReviewPanel({
       </div>
     </div>
   );
+}
+
+function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGraph; lang: "en" | "zh"; onFocusSource: (line: number) => void }) {
+  const allSteps = graph.fragments.flatMap((fragment) => fragment.steps);
+  const byId = new Map(allSteps.map((step) => [step.id, step]));
+  const labels = lang === "zh"
+    ? { local: "局部检查", declared: "已声明前提", unchecked: "边尚未验证", verified: "规则已验证", conditional: "在显式前提下成立", assumptions: "假设", definition: "定义", statement: "命题", derivation: "推导步骤", theorem: "定理应用", conclusion: "结论", docs: "阅读术语说明", limitations: "证据边界", deterministicEvidence: "确定性规则证据" }
+    : { local: "Local check", declared: "Declared prerequisite", unchecked: "Edge not checked", verified: "Rule verified", conditional: "Verified under explicit assumptions", assumptions: "Assumption", definition: "Definition", statement: "Statement", derivation: "Derivation step", theorem: "Theorem application", conclusion: "Conclusion", docs: "Read terminology", limitations: "Evidence boundary", deterministicEvidence: "Deterministic rule evidence" };
+  const kindLabel: Record<ProofStep["kind"], string> = {
+    assumption: labels.assumptions,
+    definition: labels.definition,
+    statement: labels.statement,
+    derivation_step: labels.derivation,
+    theorem_application: labels.theorem,
+    conclusion: labels.conclusion,
+  };
+  const statusTone: Record<ProofStep["local_status"], string> = {
+    locally_verified: "bg-emerald-50 text-emerald-800",
+    partially_checked: "bg-sky-50 text-sky-800",
+    inconclusive: "bg-amber-50 text-amber-800",
+    failed: "bg-rose-50 text-rose-800",
+    not_checked: "bg-slate-100 text-slate-600",
+  };
+  const statusLabel: Record<ProofStep["local_status"], string> = {
+    locally_verified: lang === "zh" ? "局部已验证" : "Locally verified",
+    partially_checked: lang === "zh" ? "部分已检查" : "Partially checked",
+    inconclusive: lang === "zh" ? "不确定" : "Inconclusive",
+    failed: lang === "zh" ? "失败" : "Failed",
+    not_checked: lang === "zh" ? "未检查" : "Not checked",
+  };
+
+  return <div>
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
+      <div><p className="text-sm font-semibold text-slate-800">{lang === "zh" ? "局部证明片段" : "Local proof fragments"}</p><p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">{lang === "zh" ? "每个节点是一个可审阅的证明步骤；边代表待验证的依赖，而非仅由文档顺序推断出的真理。" : "Each node is a reviewable proof step. Edges are proof dependencies awaiting their own verification, not truth inferred from document order."}</p></div>
+      <a href="/docs/proof-dependency-graph" className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 transition hover:border-indigo-200 hover:bg-indigo-50">{labels.docs}</a>
+    </div>
+    <div className="mt-4 space-y-5">
+      {graph.fragments.map((fragment) => <section key={fragment.id} className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+        <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold text-slate-700">{fragment.title}</p><button onClick={() => onFocusSource(fragment.source.start_line)} className="text-[10px] font-medium text-indigo-600">L{fragment.source.start_line}–{fragment.source.end_line}</button></div>
+        <div className="mt-3 space-y-2">{fragment.steps.map((step) => {
+          const inbound = graph.dependencies.filter((edge) => edge.to_step_id === step.id);
+          return <article key={step.id} className="rounded-md border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-indigo-50 px-1.5 py-1 text-[10px] font-semibold text-indigo-700">{kindLabel[step.kind]}</span><span className={`rounded px-1.5 py-1 text-[10px] font-medium ${statusTone[step.local_status]}`}>{statusLabel[step.local_status]}</span></div><button onClick={() => onFocusSource(step.source.start_line)} className="text-[10px] font-medium text-indigo-600">L{step.source.start_line}–{step.source.end_line}</button></div><p className="mt-2 line-clamp-3 whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-600">{step.text}</p>{inbound.length > 0 && <div className="mt-3 space-y-2 border-t border-slate-100 pt-2">{inbound.map((edge) => { const source = byId.get(edge.from_step_id); const edgeLabel = edge.edge_status === "verified" ? labels.verified : edge.edge_status === "verified_under_assumptions" ? labels.conditional : edge.edge_status === "declared" ? labels.declared : labels.unchecked; const edgeTone = edge.edge_status === "verified" ? "border-emerald-100 bg-emerald-50/60 text-emerald-900" : edge.edge_status === "verified_under_assumptions" ? "border-sky-100 bg-sky-50/60 text-sky-900" : edge.edge_status === "declared" ? "border-amber-100 bg-amber-50/60 text-amber-900" : "border-slate-100 bg-slate-50 text-slate-600"; return <div key={edge.id} className={`rounded-md border px-2.5 py-2 text-[10px] leading-4 ${edgeTone}`}><p className="font-semibold">{edgeLabel}: {source ? `${kindLabel[source.kind]} · L${source.source.start_line}` : edge.from_step_id}</p><p className="mt-1 opacity-80">{edge.reason}</p>{edge.validator && <details className="mt-2"><summary className="cursor-pointer font-semibold">{labels.deterministicEvidence} · {edge.validator.label}</summary><p className="mt-1 opacity-80">{edge.validator.method}</p><pre className="mt-2 overflow-auto rounded bg-white/70 p-2 text-[9px] text-slate-700">{JSON.stringify(edge.validator.evidence, null, 2)}</pre></details>}</div>; })}</div>}</article>;
+        })}</div>
+      </section>)}
+    </div>
+    {graph.limitations?.length ? <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50/60 p-3"><p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-amber-800">{labels.limitations}</p><div className="mt-2 space-y-1 text-xs leading-5 text-amber-900">{graph.limitations.map((limitation) => <p key={limitation}>{limitation}</p>)}</div></div> : null}
+  </div>;
 }
 
 function SummaryCard({ label, value, detail, tone = "slate" }: { label: string; value: string; detail: string; tone?: "slate" | "emerald" | "amber" }) {

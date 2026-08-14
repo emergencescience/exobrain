@@ -62,11 +62,13 @@ class PostgresStorage:
                     content_hash TEXT NOT NULL DEFAULT '',
                     verification_results JSONB NOT NULL DEFAULT '[]',
                     verification_scope JSONB NOT NULL DEFAULT '{}',
+                    proof_graph JSONB NOT NULL DEFAULT '{}',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 ALTER TABLE exobrain_snapshots ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT '';
                 ALTER TABLE exobrain_snapshots ADD COLUMN IF NOT EXISTS verification_results JSONB NOT NULL DEFAULT '[]';
                 ALTER TABLE exobrain_snapshots ADD COLUMN IF NOT EXISTS verification_scope JSONB NOT NULL DEFAULT '{}';
+                ALTER TABLE exobrain_snapshots ADD COLUMN IF NOT EXISTS proof_graph JSONB NOT NULL DEFAULT '{}';
                 CREATE INDEX IF NOT EXISTS idx_exo_docs_user ON exobrain_documents(user_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_exo_snaps_doc ON exobrain_snapshots(document_id, created_at DESC);
                 CREATE TABLE IF NOT EXISTS exobrain_snapshot_shares (
@@ -221,6 +223,7 @@ class PostgresStorage:
         content_hash: str = "",
         verification_results: list[dict] | None = None,
         verification_scope: dict | None = None,
+        proof_graph: dict | None = None,
     ) -> Snapshot:
         snap = Snapshot(
             document_id=doc_id,
@@ -229,10 +232,12 @@ class PostgresStorage:
             content_hash=content_hash,
             verification_results=verification_results or [],
             verification_scope=verification_scope or {"kind": "document"},
+            proof_graph=proof_graph or {"schema_version": "proof-dependency-graph-v1", "fragments": [], "dependencies": []},
         )
         messages_json = json.dumps(messages, ensure_ascii=False)
         results_json = json.dumps(snap.verification_results, ensure_ascii=False)
         scope_json = json.dumps(snap.verification_scope, ensure_ascii=False)
+        proof_graph_json = json.dumps(snap.proof_graph, ensure_ascii=False)
         pool = _get_pool()
         conn = pool.getconn()
         try:
@@ -240,10 +245,10 @@ class PostgresStorage:
             cur.execute(
                 """
                 INSERT INTO exobrain_snapshots
-                    (id, document_id, markdown, messages, content_hash, verification_results, verification_scope)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    (id, document_id, markdown, messages, content_hash, verification_results, verification_scope, proof_graph)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
-                (snap.id, doc_id, markdown, messages_json, content_hash, results_json, scope_json),
+                (snap.id, doc_id, markdown, messages_json, content_hash, results_json, scope_json, proof_graph_json),
             )
             conn.commit()
             cur.close()
@@ -258,7 +263,7 @@ class PostgresStorage:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT id, document_id, markdown, messages, content_hash, verification_results, verification_scope, created_at
+                SELECT id, document_id, markdown, messages, content_hash, verification_results, verification_scope, proof_graph, created_at
                 FROM exobrain_snapshots WHERE document_id=%s ORDER BY created_at DESC
                 """,
                 (doc_id,),
@@ -269,7 +274,7 @@ class PostgresStorage:
             pool.putconn(conn)
         results = []
         for row in rows:
-            id_, doc_id_, markdown, messages_raw, content_hash, results_raw, scope_raw, created_at = row
+            id_, doc_id_, markdown, messages_raw, content_hash, results_raw, scope_raw, graph_raw, created_at = row
             if isinstance(messages_raw, str):
                 messages = json.loads(messages_raw)
             else:
@@ -282,6 +287,10 @@ class PostgresStorage:
                 verification_scope = json.loads(scope_raw)
             else:
                 verification_scope = scope_raw or {"kind": "document"}
+            if isinstance(graph_raw, str):
+                proof_graph = json.loads(graph_raw)
+            else:
+                proof_graph = graph_raw or {"schema_version": "proof-dependency-graph-v1", "fragments": [], "dependencies": []}
             if isinstance(created_at, datetime):
                 created_at = created_at.isoformat()
             results.append(
@@ -293,6 +302,7 @@ class PostgresStorage:
                     content_hash=content_hash or "",
                     verification_results=verification_results,
                     verification_scope=verification_scope,
+                    proof_graph=proof_graph,
                     created_at=created_at,
                 )
             )
@@ -370,7 +380,7 @@ class PostgresStorage:
             cur.execute(
                 """
                 SELECT s.id, s.document_id, s.markdown, s.messages, s.content_hash,
-                       s.verification_results, s.verification_scope, s.created_at
+                       s.verification_results, s.verification_scope, s.proof_graph, s.created_at
                 FROM exobrain_snapshot_shares sh
                 JOIN exobrain_snapshots s ON s.id = sh.snapshot_id
                 WHERE sh.token=%s
@@ -383,13 +393,15 @@ class PostgresStorage:
             pool.putconn(conn)
         if row is None:
             return None
-        id_, doc_id, markdown, messages, content_hash, results, scope, created_at = row
+        id_, doc_id, markdown, messages, content_hash, results, scope, graph, created_at = row
         if isinstance(messages, str):
             messages = json.loads(messages)
         if isinstance(results, str):
             results = json.loads(results)
         if isinstance(scope, str):
             scope = json.loads(scope)
+        if isinstance(graph, str):
+            graph = json.loads(graph)
         if isinstance(created_at, datetime):
             created_at = created_at.isoformat()
         return Snapshot(
@@ -400,6 +412,7 @@ class PostgresStorage:
             content_hash=content_hash or "",
             verification_results=results or [],
             verification_scope=scope or {"kind": "document"},
+            proof_graph=graph or {"schema_version": "proof-dependency-graph-v1", "fragments": [], "dependencies": []},
             created_at=created_at,
         )
 

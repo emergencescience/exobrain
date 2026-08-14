@@ -55,6 +55,7 @@ class Snapshot:
     content_hash: str = ""
     verification_results: list[dict] = field(default_factory=list)
     verification_scope: dict = field(default_factory=lambda: {"kind": "document"})
+    proof_graph: dict = field(default_factory=lambda: {"schema_version": "proof-dependency-graph-v1", "fragments": [], "dependencies": []})
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
@@ -66,6 +67,7 @@ class Snapshot:
             "content_hash": self.content_hash,
             "verification_results": self.verification_results,
             "verification_scope": self.verification_scope,
+            "proof_graph": self.proof_graph,
             "created_at": self.created_at,
         }
 
@@ -125,6 +127,7 @@ class StorageProtocol(Protocol):
         content_hash: str = "",
         verification_results: list[dict] | None = None,
         verification_scope: dict | None = None,
+        proof_graph: dict | None = None,
     ) -> Snapshot: ...
     async def list_snapshots(self, doc_id: str) -> list[Snapshot]: ...
     async def restore_snapshot(self, doc_id: str, snapshot_id: str) -> Document | None: ...
