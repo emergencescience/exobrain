@@ -421,7 +421,6 @@ export default function ExobrainClient({
   const [verifying, setVerifying] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "unsaved">("saved");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
 
@@ -704,15 +703,6 @@ export default function ExobrainClient({
     URL.revokeObjectURL(url);
   };
 
-  const copyMarkdown = async () => {
-    try {
-      await navigator.clipboard.writeText(markdown);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1300);
-    } catch {
-      setWorkspaceError(copy.apiError);
-    }
-  };
 
   const currentProject = projects.find((project) => project.id === currentDocId) || null;
   const showWorkspace = Boolean(currentDocId || currentProject);
@@ -816,15 +806,8 @@ export default function ExobrainClient({
             <EmptyDocumentState copy={copy} onCreate={() => void createProject()} />
           ) : (
             <>
-              <div className="border-b border-slate-200 bg-white px-4 pt-3 lg:px-5">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <input value={documentTitle} onChange={(event) => { setDocumentTitle(event.target.value); setSaveState("unsaved"); }} onBlur={() => void saveDocument()} aria-label={copy.activeDocument} className="w-full truncate border-0 bg-transparent px-0 text-base font-semibold text-slate-900 outline-none placeholder:text-slate-400" placeholder={copy.documentTitle} />
-                    <p className="mt-0.5 text-xs text-slate-400">{workspaceTab === "edit" ? copy.sourceHint : workspaceTab === "preview" ? copy.previewHint : workspaceTab === "label" ? copy.labelHint : copy.reviewHint}</p>
-                  </div>
-                  <button onClick={copyMarkdown} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 transition hover:bg-slate-50">{copied ? copy.copied : copy.copy}</button>
-                </div>
-                <div className="mt-4 flex items-center gap-4">
+              <div className="border-b border-slate-200 bg-white px-4 pt-2 lg:px-5">
+                <div className="flex items-center gap-4">
                   {([
                     ["edit", copy.edit],
                     ["preview", copy.preview],
@@ -1119,8 +1102,9 @@ function ReviewPanel({
   onSelectSnapshot: (snapshot: VerificationSnapshot) => void;
 }) {
   const [view, setView] = useState<"claims" | "graph" | "evidence">("claims");
-  const verified = results.filter((result) => result.status === "verified").length;
-  const needsReview = results.length - verified;
+  const claims = results.filter((result) => result.claim_type !== "definition");
+  const verified = claims.filter((result) => result.status === "verified").length;
+  const needsReview = claims.length - verified;
   const evidenceByClaim = results.reduce<Record<string, EvidenceLink[]>>((accumulator, result) => {
     accumulator[result.claim_id] = evidenceLinks.filter((item) => item.claim_id === result.claim_id);
     return accumulator;
@@ -1128,7 +1112,7 @@ function ReviewPanel({
   const labels = lang === "zh"
     ? { claims: "主张", graph: "证明依赖图", evidence: "执行证据", history: "快照历史", scope: "验证范围", source: "在源码中查看", selected: "验证该主张", block: "验证选中区块", noEvidence: "这个快照中还没有关联的执行证据。", noGraph: "尚未提取可显示的证明依赖。", execution: "执行结果", parent: "上游主张", assumptions: "依赖假设" }
     : { claims: "Claims", graph: "Proof dependency graph", evidence: "Execution evidence", history: "Snapshot history", scope: "Verification scope", source: "View source", selected: "Verify this claim", block: "Verify selected block", noEvidence: "No execution evidence is linked to this snapshot yet.", noGraph: "No proof dependencies were extracted for this snapshot.", execution: "Execution result", parent: "Upstream claim", assumptions: "Assumptions" };
-  const selectedClaim = results.find((item) => item.claim_id === selectedClaimId) || null;
+  const selectedClaim = claims.find((item) => item.claim_id === selectedClaimId) || null;
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-[#fcfcfd] p-4 lg:p-5">
@@ -1168,8 +1152,8 @@ function ReviewPanel({
         ) : (
           <>
             <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <SummaryCard label={copy.claims} value={String(results.length)} detail={copy.reviewSummary} />
-              <SummaryCard label={copy.verifiedCount} value={String(verified)} detail={`${Math.round((verified / Math.max(results.length, 1)) * 100)}%`} tone="emerald" />
+              <SummaryCard label={copy.claims} value={String(claims.length)} detail={copy.reviewSummary} />
+              <SummaryCard label={copy.verifiedCount} value={String(verified)} detail={`${Math.round((verified / Math.max(claims.length, 1)) * 100)}%`} tone="emerald" />
               <SummaryCard label={copy.issueCount} value={String(needsReview)} detail={stale ? copy.stale : copy.current} tone={needsReview ? "amber" : "slate"} />
               <SummaryCard label={labels.evidence} value={String(evidenceLinks.length)} detail={snapshot ? labels.execution : "—"} tone={evidenceLinks.length ? "emerald" : "slate"} />
             </div>
@@ -1179,7 +1163,7 @@ function ReviewPanel({
             </div>
 
             {view === "claims" && <div className="mt-4 space-y-3">
-              {results.map((result) => {
+              {claims.map((result) => {
                 const meta = statusMeta(result.status, copy);
                 const selected = result.claim_id === selectedClaimId;
                 const linked = evidenceByClaim[result.claim_id] || [];

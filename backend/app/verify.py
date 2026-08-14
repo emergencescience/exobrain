@@ -227,12 +227,39 @@ def _handle_frac(s: str) -> str:
     return s
 
 
+def _is_named_integral_definition(latex: str) -> bool:
+    """Return whether a bare symbol is being defined by an integral expression.
+
+    These declarations are valid proof-graph nodes, but they are not standalone
+    executable equalities. Their value must instead be supported by downstream
+    proof obligations or a rule-specific integral validator.
+    """
+    parts = _split_equality(latex)
+    if len(parts) != 2:
+        return False
+    lhs, rhs = (re.sub(r"\s+", "", part) for part in parts)
+    symbol = r"(?:[A-Za-z]|\\[A-Za-z]+)"
+    return bool(re.fullmatch(symbol, lhs)) and r"\int" in rhs
+
+
 def verify_equation(latex: str) -> VerificationResult:
     """Verify a single LaTeX equation.
 
     For equalities (a = b): check if (a - b) simplifies to 0.
     For formulas (no =): verify structural validity.
     """
+    if _is_named_integral_definition(latex):
+        return VerificationResult(
+            line=0,
+            equation=latex,
+            status="inconclusive",
+            detail=(
+                "Recorded as a named integral definition. Its value is not a "
+                "standalone executable equality; verify the downstream proof "
+                "obligations or a rule-specific integral edge instead."
+            ),
+        )
+
     # Check if it's an equality
     if "=" in latex and "\\neq" not in latex:
         # Split on = but be careful about LaTeX
