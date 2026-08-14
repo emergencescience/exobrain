@@ -132,6 +132,149 @@ def _nearest_assumption(step: dict[str, Any], assumptions: list[dict[str, Any]])
     return best if best_score > 0 or step["kind"] == "theorem_application" else None
 
 
+def _is_formula(step: dict[str, Any]) -> bool:
+    return bool(step.get("is_formula"))
+
+
+def _math_identifiers(text: str) -> set[str]:
+    """Return conservative symbolic identifiers from a LaTeX display block."""
+    identifiers = set(re.findall(r"(?<!\\)[A-Za-z]+", text))
+    ignored = {
+        "begin", "end", "displaystyle", "left", "right", "infty", "frac",
+        "sqrt", "sin", "cos", "exp", "log", "lim", "theta", "pi",
+        "mathrm", "text", "quad", "qquad", "int", "sum", "to",
+    }
+    return {identifier for identifier in identifiers if identifier.lower() not in ignored and len(identifier) <= 3}
+
+
+def _formula_lhs_identifiers(step: dict[str, Any]) -> set[str]:
+    text = step["text"].replace("$$", "")
+    lhs = text.split("=", 1)[0]
+    return _math_identifiers(lhs)
+
+
+def _formula_rhs_token(step: dict[str, Any]) -> str | None:
+    text = re.sub(r"\s+|[,;]", "", step["text"].replace("$$", ""))
+    if "=" not in text:
+        return None
+    rhs = text.rsplit("=", 1)[-1].rstrip(".:")
+    return rhs if 1 < len(rhs) <= 96 else None
+
+
+def _append_edge(
+    dependencies: list[dict[str, Any]],
+    *,
+    content_hash: str,
+    source: dict[str, Any],
+    target: dict[str, Any],
+    kind: str,
+    reason: str,
+) -> None:
+    if source["id"] == target["id"]:
+        return
+    if any(
+        edge.get("from_step_id") == source["id"]
+        and edge.get("to_step_id") == target["id"]
+        and edge.get("kind") == kind
+        for edge in dependencies
+    ):
+        return
+    dependencies.append({
+        "id": _stable_id("edge", content_hash, target["source"]["start_line"], f"{source['id']}->{target['id']}:{kind}"),
+        "from_step_id": source["id"],
+        "to_step_id": target["id"],
+        "kind": kind,
+        "edge_status": "not_checked",
+        "reason": reason,
+    })
+
+
+def _add_explicit_derivation_edges(
+    dependencies: list[dict[str, Any]],
+    ordered_steps: list[dict[str, Any]],
+    content_hash: str,
+) -> None:
+    """Extract local, reviewable cross-formula relations without claiming proof.
+
+    Unlike the sequential candidate edge, these edges name the relation inferred
+    from the mathematical source: a formula transformation, use of a prior
+    definition, a theorem justification, or a result substitution.  Their
+    status is intentionally `not_checked` until a specific validator discharges
+    that relation.
+    """
+    formulas = [step for step in ordered_steps if _is_formula(step)]
+    for source, target in zip(formulas, formulas[1:]):
+        if source["fragment_id"] != target["fragment_id"]:
+            continue
+        shared = _formula_lhs_identifiers(source) & _formula_lhs_identifiers(target)
+        if shared:
+            names = ", ".join(sorted(shared))
+            _append_edge(
+                dependencies,
+                content_hash=content_hash,
+                source=source,
+                target=target,
+                kind="formula_transform",
+                reason=f"Candidate formula-to-formula transformation inferred from the preserved lhs symbol(s): {names}.",
+            )
+
+    definition_formula: dict[str, Any] | None = None
+    definition_cue = False
+    for step in ordered_steps:
+        if step["kind"] == "definition":
+            definition_cue = True
+            continue
+        if definition_cue and _is_formula(step):
+            definition_formula = step
+            definition_cue = False
+            continue
+        if _is_formula(step) and definition_formula is not None:
+            defined = _formula_lhs_identifiers(definition_formula)
+            if defined & _math_identifiers(step["text"]):
+                names = ", ".join(sorted(defined & _math_identifiers(step["text"])))
+                _append_edge(
+                    dependencies,
+                    content_hash=content_hash,
+                    source=definition_formula,
+                    target=step,
+                    kind="uses_definition",
+                    reason=f"Candidate use of the earlier definition through symbol(s): {names}.",
+                )
+
+    for index, step in enumerate(ordered_steps):
+        if step["kind"] != "theorem_application":
+            continue
+        nearest_formula = next((candidate for candidate in reversed(ordered_steps[:index]) if _is_formula(candidate) and candidate["fragment_id"] == step["fragment_id"]), None)
+        if nearest_formula is None:
+            nearest_formula = next((candidate for candidate in ordered_steps[index + 1:] if _is_formula(candidate) and candidate["fragment_id"] == step["fragment_id"]), None)
+        if nearest_formula is not None:
+            _append_edge(
+                dependencies,
+                content_hash=content_hash,
+                source=step,
+                target=nearest_formula,
+                kind="justifies",
+                reason="The source explicitly names this theorem application as justification; its preconditions remain an open proof obligation.",
+            )
+
+    for index, source in enumerate(formulas):
+        output = _formula_rhs_token(source)
+        if output is None:
+            continue
+        for target in formulas[index + 1:index + 4]:
+            target_text = re.sub(r"\s+|[,;]", "", target["text"].replace("$$", ""))
+            if output not in target_text:
+                continue
+            _append_edge(
+                dependencies,
+                content_hash=content_hash,
+                source=source,
+                target=target,
+                kind="substitutes_result",
+                reason=f"Candidate substitution: the prior computed result `{output}` reappears in this later formula.",
+            )
+            break
+
 def build_proof_graph(markdown: str, verification_results: list[dict[str, Any]]) -> dict[str, Any]:
     """Return local proof fragments and candidate proof dependencies.
 
@@ -162,6 +305,7 @@ def build_proof_graph(markdown: str, verification_results: list[dict[str, Any]])
             "source": {"start_line": block.start_line, "end_line": block.end_line},
             "local_status": _result_status(block, verification_results),
             "fragment_id": fragment["id"],
+            "is_formula": block.text.lstrip().startswith("$$"),
         }
         fragment["steps"].append(step)
         ordered_steps.append(step)
@@ -193,6 +337,7 @@ def build_proof_graph(markdown: str, verification_results: list[dict[str, Any]])
             })
         prior_step = step
 
+    _add_explicit_derivation_edges(dependencies, ordered_steps, content_hash)
     graph = {
         "schema_version": "proof-dependency-graph-v1",
         "content_hash": content_hash,

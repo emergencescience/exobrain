@@ -134,7 +134,7 @@ interface Props {
   apiBaseUrl?: string;
 }
 
-type WorkspaceTab = "edit" | "preview" | "review";
+type WorkspaceTab = "edit" | "preview" | "label" | "review";
 type MobilePane = "project" | "document" | "assistant";
 
 const COPY = {
@@ -158,10 +158,16 @@ const COPY = {
     edit: "Edit",
     preview: "Preview",
     review: "Review",
+    label: "Label",
     document: "Document",
     sourceHint: "Markdown and LaTeX source",
     previewHint: "Rendered scientific document",
     reviewHint: "Claims, evidence and verification scope",
+    labelHint: "Rendered document with source-anchored verification markers",
+    labelEmpty: "Run verification to add claim markers to the rendered document.",
+    labelLegend: "Claim markers",
+    openEvidence: "Open verification result",
+    closeEvidence: "Close result",
     runVerification: "Run verification",
     rerunVerification: "Re-run verification",
     stale: "Source changed after this verification",
@@ -241,10 +247,16 @@ const COPY = {
     edit: "编辑",
     preview: "预览",
     review: "评审",
+    label: "标注",
     document: "文档",
     sourceHint: "Markdown 与 LaTeX 源码",
     previewHint: "渲染后的科学文档",
     reviewHint: "主张、证据与验证范围",
+    labelHint: "与正文同步的验证标注阅读层",
+    labelEmpty: "运行验证后，正文会显示可点击的主张标记。",
+    labelLegend: "主张标记",
+    openEvidence: "打开验证结果",
+    closeEvidence: "关闭结果",
     runVerification: "运行验证",
     rerunVerification: "重新验证",
     stale: "此后源文档已被修改",
@@ -394,6 +406,7 @@ export default function ExobrainClient({
   const [markdown, setMarkdown] = useState(initialDraft.markdown);
   const [messages, setMessages] = useState<Message[]>(initialDraft.messages);
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("edit");
+  const [labelFocusLine, setLabelFocusLine] = useState<number | null>(null);
   const [mobilePane, setMobilePane] = useState<MobilePane>("document");
   const [verifyResults, setVerifyResults] = useState<VerifyResult[]>([]);
   const [verificationSnapshot, setVerificationSnapshot] = useState<VerificationSnapshot | null>(null);
@@ -589,16 +602,8 @@ export default function ExobrainClient({
   };
 
   const focusSourceLine = (line: number) => {
-    setWorkspaceTab("edit");
-    window.setTimeout(() => {
-      const editor = editorRef.current;
-      if (!editor) return;
-      const start = editorSelectionStart(markdown, line);
-      const end = markdown.indexOf("\n", start);
-      editor.focus();
-      editor.setSelectionRange(start, end === -1 ? markdown.length : end);
-      editor.scrollTop = Math.max(0, (line - 3) * 24);
-    }, 0);
+    setLabelFocusLine(line);
+    setWorkspaceTab("label");
   };
 
   const captureSourceSelection = () => {
@@ -815,7 +820,7 @@ export default function ExobrainClient({
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <input value={documentTitle} onChange={(event) => { setDocumentTitle(event.target.value); setSaveState("unsaved"); }} onBlur={() => void saveDocument()} aria-label={copy.activeDocument} className="w-full truncate border-0 bg-transparent px-0 text-base font-semibold text-slate-900 outline-none placeholder:text-slate-400" placeholder={copy.documentTitle} />
-                    <p className="mt-0.5 text-xs text-slate-400">{workspaceTab === "edit" ? copy.sourceHint : workspaceTab === "preview" ? copy.previewHint : copy.reviewHint}</p>
+                    <p className="mt-0.5 text-xs text-slate-400">{workspaceTab === "edit" ? copy.sourceHint : workspaceTab === "preview" ? copy.previewHint : workspaceTab === "label" ? copy.labelHint : copy.reviewHint}</p>
                   </div>
                   <button onClick={copyMarkdown} className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 transition hover:bg-slate-50">{copied ? copy.copied : copy.copy}</button>
                 </div>
@@ -823,6 +828,7 @@ export default function ExobrainClient({
                   {([
                     ["edit", copy.edit],
                     ["preview", copy.preview],
+                    ["label", copy.label],
                     ["review", copy.review],
                   ] as [WorkspaceTab, string][]).map(([tab, label]) => (
                     <button key={tab} onClick={() => setWorkspaceTab(tab)} className={`border-b-2 px-0.5 pb-2 text-xs font-semibold transition ${workspaceTab === tab ? "border-indigo-600 text-indigo-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}>{label}</button>
@@ -850,6 +856,19 @@ export default function ExobrainClient({
                     <ReactMarkdown remarkPlugins={markdownPlugins} rehypePlugins={htmlPlugins}>{markdown}</ReactMarkdown>
                   </article>
                 </div>
+              )}
+
+              {workspaceTab === "label" && (
+                <LabelDocument
+                  markdown={markdown}
+                  results={verifyResults}
+                  stale={stale}
+                  copy={copy}
+                  markdownPlugins={markdownPlugins}
+                  htmlPlugins={htmlPlugins}
+                  focusLine={labelFocusLine}
+                  onFocused={() => setLabelFocusLine(null)}
+                />
               )}
 
               {workspaceTab === "review" && (
@@ -917,6 +936,144 @@ function EmptyDocumentState({ copy, onCreate }: { copy: Copy; onCreate: () => vo
         <h1 className="mt-5 text-xl font-semibold tracking-tight text-slate-900">{copy.noDocument}</h1>
         <p className="mt-2 text-sm leading-6 text-slate-500">{copy.noDocumentDescription}</p>
         <button onClick={onCreate} className="mt-6 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500">{copy.createDocument}</button>
+      </div>
+    </div>
+  );
+}
+
+function markerMeta(status: VerificationStatus) {
+  if (status === "verified") return { glyph: "✓", tone: "border-emerald-300 bg-emerald-50 text-emerald-700 shadow-emerald-100", ring: "ring-emerald-200" };
+  if (status === "failed" || status === "error") return { glyph: "×", tone: "border-rose-300 bg-rose-50 text-rose-700 shadow-rose-100", ring: "ring-rose-200" };
+  return { glyph: "!", tone: "border-amber-300 bg-amber-50 text-amber-700 shadow-amber-100", ring: "ring-amber-200" };
+}
+
+type LabelSegment = { key: string; markdown: string; result?: VerifyResult; startLine: number; endLine: number };
+
+function expandToMarkdownBlock(lines: string[], startLine: number, endLine: number) {
+  let openDisplayMath: number | null = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].trim().startsWith("$$")) continue;
+    if (openDisplayMath === null) {
+      openDisplayMath = index + 1;
+      continue;
+    }
+    const closeDisplayMath = index + 1;
+    if (openDisplayMath <= endLine && closeDisplayMath >= startLine) {
+      return { startLine: openDisplayMath, endLine: closeDisplayMath };
+    }
+    openDisplayMath = null;
+  }
+  return { startLine, endLine };
+}
+
+function labelSegments(markdown: string, results: VerifyResult[]): LabelSegment[] {
+  const lines = markdown.split("\n");
+  const sorted = [...results]
+    .filter((result) => result.line >= 1 && result.line <= lines.length)
+    .sort((left, right) => left.line - right.line || left.end_line - right.end_line)
+    .map((result) => {
+      const sourceRange = expandToMarkdownBlock(lines, result.line, Math.max(result.line, result.end_line || result.line));
+      return { result, ...sourceRange };
+    });
+  const segments: LabelSegment[] = [];
+  let cursor = 1;
+  for (const item of sorted) {
+    const start = Math.max(cursor, item.startLine);
+    const end = Math.min(lines.length, Math.max(start, item.endLine));
+    if (start > cursor) {
+      segments.push({ key: `plain-${cursor}`, markdown: lines.slice(cursor - 1, start - 1).join("\n"), startLine: cursor, endLine: start - 1 });
+    }
+    segments.push({ key: item.result.claim_id, markdown: lines.slice(start - 1, end).join("\n"), result: item.result, startLine: start, endLine: end });
+    cursor = end + 1;
+  }
+  if (cursor <= lines.length) {
+    segments.push({ key: `plain-${cursor}`, markdown: lines.slice(cursor - 1).join("\n"), startLine: cursor, endLine: lines.length });
+  }
+  return segments.filter((segment) => segment.markdown.trim());
+}
+
+function LabelDocument({
+  markdown,
+  results,
+  stale,
+  copy,
+  markdownPlugins,
+  htmlPlugins,
+  focusLine,
+  onFocused,
+}: {
+  markdown: string;
+  results: VerifyResult[];
+  stale: boolean;
+  copy: Copy;
+  markdownPlugins: typeof remarkMath[];
+  htmlPlugins: typeof rehypeKatex[];
+  focusLine: number | null;
+  onFocused: () => void;
+}) {
+  const [openClaimId, setOpenClaimId] = useState<string | null>(null);
+  const segments = useMemo(() => labelSegments(markdown, results), [markdown, results]);
+
+  useEffect(() => {
+    if (focusLine === null) return;
+    const target = document.getElementById(`label-source-${focusLine}`);
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    onFocused();
+  }, [focusLine, onFocused]);
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto bg-[#fcfcfd] px-5 py-7 lg:px-10">
+      <div className="mx-auto max-w-3xl">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div>
+            <p className="text-xs font-semibold text-slate-800">{copy.labelLegend}</p>
+            <p className="mt-0.5 text-[11px] leading-4 text-slate-500">{results.length ? copy.labelHint : copy.labelEmpty}</p>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] font-medium text-slate-500" aria-label={copy.labelLegend}>
+            <span className="inline-flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-emerald-500" />{copy.verified}</span>
+            <span className="inline-flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-amber-500" />{copy.issueCount}</span>
+            <span className="inline-flex items-center gap-1"><i className="h-2 w-2 rounded-full bg-rose-500" />{copy.failed}</span>
+          </div>
+        </div>
+        {stale && <p className="mb-5 inline-flex rounded-md bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800">{copy.stale}</p>}
+        <article className="exobrain-prose mx-auto max-w-3xl">
+          {segments.map((segment) => {
+            const result = segment.result;
+            const marker = result ? markerMeta(result.status) : null;
+            const selected = result?.claim_id === openClaimId;
+            return (
+              <section key={segment.key} id={`label-source-${segment.startLine}`} className={`relative scroll-mt-20 pr-12 ${selected ? "rounded-lg bg-indigo-50/50 px-3 py-1 -mx-3" : ""}`}>
+                <ReactMarkdown remarkPlugins={markdownPlugins} rehypePlugins={htmlPlugins}>{segment.markdown}</ReactMarkdown>
+                {result && marker && (
+                  <div className="absolute right-0 top-2 z-10">
+                    <button
+                      type="button"
+                      onClick={() => setOpenClaimId(selected ? null : result.claim_id)}
+                      aria-expanded={selected}
+                      aria-label={`${copy.openEvidence}: ${statusMeta(result.status, copy).label}`}
+                      className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs font-bold shadow-sm transition hover:scale-110 focus:outline-none focus:ring-2 ${marker.tone} ${marker.ring}`}
+                    >
+                      {marker.glyph}
+                    </button>
+                    {selected && (
+                      <div role="dialog" aria-label={copy.openEvidence} className="absolute right-0 top-8 z-30 w-80 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl ring-1 ring-slate-950/5">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{copy.claim} · L{result.line}–{result.end_line}</p>
+                            <span className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold ${statusMeta(result.status, copy).className}`}><i className={`h-1.5 w-1.5 rounded-full ${statusMeta(result.status, copy).dot}`} />{statusMeta(result.status, copy).label}</span>
+                          </div>
+                          <button type="button" onClick={() => setOpenClaimId(null)} aria-label={copy.closeEvidence} className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">×</button>
+                        </div>
+                        <p className="mt-3 whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-700">{displayEquation(result.equation)}</p>
+                        <p className="mt-3 border-t border-slate-100 pt-3 text-xs leading-5 text-slate-600">{result.detail}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </article>
       </div>
     </div>
   );
@@ -1072,6 +1229,9 @@ function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGrap
     theorem_application: labels.theorem,
     conclusion: labels.conclusion,
   };
+  const relationLabel: Record<string, string> = lang === "zh"
+    ? { derives: "推导", requires_assumption: "需要前提", formula_transform: "公式变换", uses_definition: "使用定义", justifies: "论证", substitutes_result: "代入结果" }
+    : { derives: "derives", requires_assumption: "requires assumption", formula_transform: "formula transformation", uses_definition: "uses definition", justifies: "justifies", substitutes_result: "substitutes result" };
   const statusTone: Record<ProofStep["local_status"], string> = {
     locally_verified: "bg-emerald-50 text-emerald-800",
     partially_checked: "bg-sky-50 text-sky-800",
@@ -1097,7 +1257,7 @@ function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGrap
         <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold text-slate-700">{fragment.title}</p><button onClick={() => onFocusSource(fragment.source.start_line)} className="text-[10px] font-medium text-indigo-600">L{fragment.source.start_line}–{fragment.source.end_line}</button></div>
         <div className="mt-3 space-y-2">{fragment.steps.map((step) => {
           const inbound = graph.dependencies.filter((edge) => edge.to_step_id === step.id);
-          return <article key={step.id} className="rounded-md border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-indigo-50 px-1.5 py-1 text-[10px] font-semibold text-indigo-700">{kindLabel[step.kind]}</span><span className={`rounded px-1.5 py-1 text-[10px] font-medium ${statusTone[step.local_status]}`}>{statusLabel[step.local_status]}</span></div><button onClick={() => onFocusSource(step.source.start_line)} className="text-[10px] font-medium text-indigo-600">L{step.source.start_line}–{step.source.end_line}</button></div><p className="mt-2 line-clamp-3 whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-600">{step.text}</p>{inbound.length > 0 && <div className="mt-3 space-y-2 border-t border-slate-100 pt-2">{inbound.map((edge) => { const source = byId.get(edge.from_step_id); const edgeLabel = edge.edge_status === "verified" ? labels.verified : edge.edge_status === "verified_under_assumptions" ? labels.conditional : edge.edge_status === "declared" ? labels.declared : labels.unchecked; const edgeTone = edge.edge_status === "verified" ? "border-emerald-100 bg-emerald-50/60 text-emerald-900" : edge.edge_status === "verified_under_assumptions" ? "border-sky-100 bg-sky-50/60 text-sky-900" : edge.edge_status === "declared" ? "border-amber-100 bg-amber-50/60 text-amber-900" : "border-slate-100 bg-slate-50 text-slate-600"; return <div key={edge.id} className={`rounded-md border px-2.5 py-2 text-[10px] leading-4 ${edgeTone}`}><p className="font-semibold">{edgeLabel}: {source ? `${kindLabel[source.kind]} · L${source.source.start_line}` : edge.from_step_id}</p><p className="mt-1 opacity-80">{edge.reason}</p>{edge.validator && <details className="mt-2"><summary className="cursor-pointer font-semibold">{labels.deterministicEvidence} · {edge.validator.label}</summary><p className="mt-1 opacity-80">{edge.validator.method}</p><pre className="mt-2 overflow-auto rounded bg-white/70 p-2 text-[9px] text-slate-700">{JSON.stringify(edge.validator.evidence, null, 2)}</pre></details>}</div>; })}</div>}</article>;
+          return <article key={step.id} className="rounded-md border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-indigo-50 px-1.5 py-1 text-[10px] font-semibold text-indigo-700">{kindLabel[step.kind]}</span><span className={`rounded px-1.5 py-1 text-[10px] font-medium ${statusTone[step.local_status]}`}>{statusLabel[step.local_status]}</span></div><button onClick={() => onFocusSource(step.source.start_line)} className="text-[10px] font-medium text-indigo-600">L{step.source.start_line}–{step.source.end_line}</button></div><p className="mt-2 line-clamp-3 whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-600">{step.text}</p>{inbound.length > 0 && <div className="mt-3 space-y-2 border-t border-slate-100 pt-2">{inbound.map((edge) => { const source = byId.get(edge.from_step_id); const edgeLabel = edge.edge_status === "verified" ? labels.verified : edge.edge_status === "verified_under_assumptions" ? labels.conditional : edge.edge_status === "declared" ? labels.declared : labels.unchecked; const edgeTone = edge.edge_status === "verified" ? "border-emerald-100 bg-emerald-50/60 text-emerald-900" : edge.edge_status === "verified_under_assumptions" ? "border-sky-100 bg-sky-50/60 text-sky-900" : edge.edge_status === "declared" ? "border-amber-100 bg-amber-50/60 text-amber-900" : "border-slate-100 bg-slate-50 text-slate-600"; return <div key={edge.id} className={`rounded-md border px-2.5 py-2 text-[10px] leading-4 ${edgeTone}`}><p className="font-semibold">{edgeLabel}: {relationLabel[edge.kind] ?? edge.kind} · {source ? `${kindLabel[source.kind]} · L${source.source.start_line}` : edge.from_step_id}</p><p className="mt-1 opacity-80">{edge.reason}</p>{edge.validator && <details className="mt-2"><summary className="cursor-pointer font-semibold">{labels.deterministicEvidence} · {edge.validator.label}</summary><p className="mt-1 opacity-80">{edge.validator.method}</p><pre className="mt-2 overflow-auto rounded bg-white/70 p-2 text-[9px] text-slate-700">{JSON.stringify(edge.validator.evidence, null, 2)}</pre></details>}</div>; })}</div>}</article>;
         })}</div>
       </section>)}
     </div>

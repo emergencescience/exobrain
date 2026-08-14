@@ -131,7 +131,9 @@ def apply_rule_specific_validators(graph: dict[str, Any]) -> dict[str, Any]:
     positivity = next((step for step in steps if _step_states_i_positive(step)), None)
     if i_squared and positive_root and positivity:
         exists = any(
-            edge.get("from_step_id") == i_squared["id"] and edge.get("to_step_id") == positive_root["id"]
+            edge.get("from_step_id") == i_squared["id"]
+            and edge.get("to_step_id") == positive_root["id"]
+            and edge.get("validator", {}).get("id") == "positive-square-root-v1"
             for edge in graph.get("dependencies", [])
         )
         if not exists:
