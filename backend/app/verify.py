@@ -28,6 +28,18 @@ class VerificationResult:
     detail: str        # human-readable explanation
 
 
+def _is_inline_verification_candidate(equation: str) -> bool:
+    """Return whether inline math contains a relationship worth examining."""
+    return bool(re.search(r"(?<!\\)[=<>]|\\(?:neq|le|ge|approx)", equation))
+
+
+def _is_inline_context_assignment(equation: str, preceding_text: str) -> bool:
+    """Recognize prose such as ``at x=0`` without dropping actual results."""
+    if not re.fullmatch(r"[A-Za-z]\s*=\s*[+-]?\d+(?:\.\d+)?", equation.strip()):
+        return False
+    return bool(re.search(r"(?:\b(?:at|when|for|near)\b|在|当|取)\s*$", preceding_text.strip(), re.IGNORECASE))
+
+
 def extract_equations(markdown: str) -> list[tuple[int, str, str]]:
     """Extract all LaTeX equations from markdown.
 
@@ -54,7 +66,9 @@ def extract_equations(markdown: str) -> list[tuple[int, str, str]]:
         if any(start <= match.start() < end for start, end in block_spans):
             continue
         eq = match.group(1).strip()
-        if eq:
+        line_start = markdown.rfind("\n", 0, match.start()) + 1
+        preceding_text = markdown[line_start:match.start()]
+        if _is_inline_verification_candidate(eq) and not _is_inline_context_assignment(eq, preceding_text):
             line_idx = markdown.count("\n", 0, match.start()) + 1
             equations.append((line_idx, eq, "inline"))
 
@@ -242,6 +256,59 @@ def _is_named_integral_definition(latex: str) -> bool:
     return bool(re.fullmatch(symbol, lhs)) and r"\int" in rhs
 
 
+def _top_level_equality_count(latex: str) -> int:
+    """Count equality signs outside LaTeX brace groups."""
+    depth = 0
+    count = 0
+    for character in latex:
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(depth - 1, 0)
+        elif character == "=" and depth == 0:
+            count += 1
+    return count
+
+
+def _requires_structured_relation_check(latex: str) -> str | None:
+    """Explain why an expression must not be treated as a plain SymPy equality."""
+    if any(token in latex for token in (r"\cdots", r"\ldots", r"\dots", r"\vdots", r"\ddots")):
+        return (
+            "Contains an informal ellipsis. This is a schematic expansion, not "
+            "a finite executable equality; verify a bounded instance or a "
+            "rule-specific series expansion instead."
+        )
+    if r"\approx" in latex:
+        return (
+            "Contains an approximation. A deterministic check requires an "
+            "explicit error bound, domain, or numeric substitution."
+        )
+    if re.search(r"[A-Za-z]\s*\^\s*\{\([^{}]+\)\}\s*\(", latex):
+        return (
+            "Contains a symbolic higher-order derivative. It requires a "
+            "derivative rule or an explicit instantiated order."
+        )
+    if _top_level_equality_count(latex) > 1 and r"\neq" not in latex:
+        return (
+            "Contains a chained equality. Its adjacent relations are separate "
+            "proof obligations and must not be subtracted as one SymPy value."
+        )
+    return None
+
+
+def _looks_like_function_derivation_chain(equations: list[tuple[int, str, str]]) -> bool:
+    """Limit the specialized derivative-chain verifier to its supported shape."""
+    has_function_definition = any(
+        re.match(r"\s*[A-Za-z]\s*\(\s*[A-Za-z]\s*\)\s*=", equation)
+        for _, equation, _ in equations
+    )
+    has_first_derivative = any(
+        re.search(r"[A-Za-z]\s*'\s*\(|\\frac\s*\{d", equation)
+        for _, equation, _ in equations
+    )
+    return has_function_definition and has_first_derivative
+
+
 def verify_equation(latex: str) -> VerificationResult:
     """Verify a single LaTeX equation.
 
@@ -258,6 +325,15 @@ def verify_equation(latex: str) -> VerificationResult:
                 "standalone executable equality; verify the downstream proof "
                 "obligations or a rule-specific integral edge instead."
             ),
+        )
+
+    structured_reason = _requires_structured_relation_check(latex)
+    if structured_reason is not None:
+        return VerificationResult(
+            line=0,
+            equation=latex,
+            status="inconclusive",
+            detail=structured_reason,
         )
 
     # Check if it's an equality
@@ -835,10 +911,13 @@ def verify_document(markdown: str, locale: str = "en") -> list[VerificationResul
     if sum_of_squares_audit is not None:
         return sum_of_squares_audit
 
-    # Try chain verification first
-    chain_results = verify_derivation_chain(equations, markdown)
-    if chain_results is not None:
-        return chain_results
+    # Apply the specialized derivative-chain verifier only when its supported
+    # first-derivative shape is present. Other mathematical documents remain on
+    # the conservative per-equation path rather than being forced through it.
+    if _looks_like_function_derivation_chain(equations):
+        chain_results = verify_derivation_chain(equations, markdown)
+        if chain_results is not None:
+            return chain_results
 
     results = []
     for line_idx, eq, display_mode in equations:
