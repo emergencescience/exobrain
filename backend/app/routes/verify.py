@@ -208,10 +208,14 @@ async def verify(
     scope_metadata = _scope_metadata(req.scope)
     proof_graph = build_proof_graph(req.markdown, [result.model_dump() for result in results])
     if req.semantic_parse:
-        proposal = await propose_semantic_structure(proof_graph, req.locale)
+        proposal, semantic_status = await propose_semantic_structure(proof_graph, req.locale)
         if proposal is not None:
             proof_graph = apply_semantic_proposal(proof_graph, proposal)
         else:
+            proof_graph["semantic_proposal"] = {
+                **semantic_status,
+                "model": config.llm_model,
+            }
             proof_graph.setdefault("limitations", []).append(
                 "Semantic proof parsing was requested but no source-bound LLM proposal was available; heuristic structure is shown instead."
             )

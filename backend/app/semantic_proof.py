@@ -117,13 +117,17 @@ def validate_semantic_proposal(raw: dict[str, Any], graph: dict[str, Any]) -> di
     return {"fragments": normalized_fragments, "steps": normalized_steps}
 
 
-async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> dict[str, Any] | None:
-    """Ask the configured server-side model for a source-bound structural proposal."""
+async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tuple[dict[str, Any] | None, dict[str, str]]:
+    """Ask the configured server-side model for a source-bound structural proposal.
+
+    The second return value is a safe, user-visible availability summary.  It
+    never includes provider response bodies or credentials.
+    """
     if not config.llm_api_key:
-        return None
+        return None, {"status": "unavailable", "reason": "llm_not_configured", "notice": "Semantic parsing needs a configured server-side LLM provider."}
     payload = _source_payload(graph)
     if not payload:
-        return None
+        return None, {"status": "unavailable", "reason": "no_source_steps", "notice": "The selected source contains no proof steps to classify."}
     system = """You classify local mathematical proof source blocks. Return a structural proposal, not proof evidence. Preserve the supplied IDs and never invent a step. Definitions, hypotheses, and cited lemmas use verification_target=none. A deduction uses sympy only for closed local algebra/calculation; use rule for a named bounded rewrite or theorem-specific validator. A theorem citation is a lemma, not a verified deduction. An approximation with an omitted remainder must remain rule and identify the missing error-bound obligation. Do not claim anything verified."""
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
@@ -145,10 +149,15 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> dict
             proposal = validate_semantic_proposal(json.loads(raw_content), graph)
             if proposal is None:
                 logger.warning("Rejected source-unbound semantic proof proposal")
-            return proposal
+                return None, {"status": "unavailable", "reason": "proposal_rejected", "notice": "The LLM response could not be tied safely to the document source steps."}
+            return proposal, {"status": "proposed", "reason": "", "notice": "Source-bound LLM structure proposal available."}
+    except httpx.HTTPStatusError as exc:
+        logger.info("Semantic proof provider returned HTTP %s", exc.response.status_code)
+        reason = "provider_authentication_failed" if exc.response.status_code in {401, 403} else "provider_request_failed"
+        return None, {"status": "unavailable", "reason": reason, "notice": "The configured semantic-parser provider did not accept this request. Check the server-side LLM configuration."}
     except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         logger.info("Semantic proof proposal unavailable: %s", exc)
-        return None
+        return None, {"status": "unavailable", "reason": "provider_request_failed", "notice": "The semantic-parser provider was unavailable; heuristic structure is shown instead."}
 
 
 def apply_semantic_proposal(graph: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:

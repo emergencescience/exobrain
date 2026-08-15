@@ -108,6 +108,12 @@ interface ProofGraph {
   fragments: ProofFragment[];
   dependencies: ProofDependency[];
   limitations?: string[];
+  semantic_proposal?: {
+    status: "proposed" | "unavailable";
+    reason?: string;
+    notice?: string;
+    model?: string;
+  };
 }
 interface VerificationSnapshot {
   id: string;
@@ -1352,6 +1358,8 @@ function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGrap
   };
 
   return <div>
+    {graph.semantic_proposal?.status === "unavailable" && <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900"><span className="font-semibold">{lang === "zh" ? "语义解析未运行：" : "Semantic parsing unavailable: "}</span>{graph.semantic_proposal.notice || (lang === "zh" ? "当前显示启发式结构。" : "heuristic structure is shown.")}</div>}
+    {graph.semantic_proposal?.status === "proposed" && <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-900"><span className="font-semibold">{lang === "zh" ? "LLM 结构提案：" : "LLM structure proposal: "}</span>{lang === "zh" ? "角色与关系已绑定原文；绿色仍仅表示确定性证据。" : "roles and relations are source-bound; green still requires deterministic evidence."}</div>}
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
       <div><p className="text-sm font-semibold text-slate-800">{lang === "zh" ? "局部证明片段" : "Local proof fragments"}</p><p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">{lang === "zh" ? "每个节点是一个可审阅的证明步骤；边代表待验证的依赖，而非仅由文档顺序推断出的真理。" : "Each node is a reviewable proof step. Edges are proof dependencies awaiting their own verification, not truth inferred from document order."}</p></div>
       <a href="/docs/proof-dependency-graph" className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 transition hover:border-indigo-200 hover:bg-indigo-50">{labels.docs}</a>

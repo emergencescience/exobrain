@@ -74,7 +74,7 @@ def test_verify_route_persists_a_source_bound_semantic_proposal(client, monkeypa
 
     async def fake_proposal(graph, locale):
         steps = [step for fragment in graph["fragments"] for step in fragment["steps"]]
-        return {
+        return ({
             "fragments": [{"title": "Cited premise", "role": "lemma", "step_ids": [steps[0]["id"]]}],
             "steps": [{
                 "step_id": steps[0]["id"],
@@ -84,7 +84,7 @@ def test_verify_route_persists_a_source_bound_semantic_proposal(client, monkeypa
                 "depends_on": [],
                 "rationale": "Cited source premise.",
             }],
-        }
+        }, {"status": "proposed", "reason": "", "notice": "Source-bound LLM structure proposal available."})
 
     monkeypatch.setattr(verify_route, "propose_semantic_structure", fake_proposal)
     response = client.post(
@@ -105,3 +105,28 @@ def test_verify_route_persists_a_source_bound_semantic_proposal(client, monkeypa
     assert annotated["semantic_role"] == "lemma"
     assert annotated["local_status"] == "not_required"
     assert "LLM structure" in graph["semantic_proposal"]["notice"]
+
+
+def test_semantic_parser_reports_provider_authentication_failure(monkeypatch):
+    import httpx
+    import app.semantic_proof as semantic_proof
+
+    graph = _graph()
+
+    class FailingClient:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+        async def post(self, *args, **kwargs):
+            request = httpx.Request("POST", "https://provider.invalid/v1/chat/completions")
+            response = httpx.Response(401, request=request)
+            raise httpx.HTTPStatusError("401", request=request, response=response)
+
+    monkeypatch.setattr(semantic_proof.config, "llm_api_key", "configured")
+    monkeypatch.setattr(semantic_proof.httpx, "AsyncClient", lambda timeout: FailingClient())
+    proposal, status = __import__("asyncio").run(semantic_proof.propose_semantic_structure(graph, "en"))
+
+    assert proposal is None
+    assert status["reason"] == "provider_authentication_failed"
+    assert status["status"] == "unavailable"
