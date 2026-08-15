@@ -237,6 +237,7 @@ def test_semantic_parser_retries_without_response_format_when_provider_rejects_s
 
     client = CompatibleClient()
     monkeypatch.setattr(semantic_proof.config, "llm_api_key", "configured")
+    monkeypatch.setattr(semantic_proof.config, "llm_base_url", "https://provider.test")
     monkeypatch.setattr(semantic_proof.httpx, "AsyncClient", lambda timeout: client)
 
     proposal, status = asyncio.run(semantic_proof.propose_semantic_structure(graph, "en"))
@@ -245,3 +246,76 @@ def test_semantic_parser_retries_without_response_format_when_provider_rejects_s
     assert status["status"] == "proposed"
     assert "response_format" in client.payloads[0]
     assert "response_format" not in client.payloads[1]
+
+
+def test_deepseek_semantic_parse_skips_unsupported_schema_and_bounds_request(monkeypatch):
+    import asyncio
+    import httpx
+    import app.semantic_proof as semantic_proof
+
+    graph = _graph()
+    step = graph["fragments"][0]["steps"][0]
+    raw_proposal = {
+        "fragments": [{"title": "Definition", "role": "definition", "step_ids": [step["id"]]}],
+        "steps": [{"step_id": step["id"], "role": "definition", "verification_target": "none", "rule_id": "", "depends_on": [], "rationale": "Definition."}],
+    }
+
+    class DeepSeekClient:
+        requests = []
+        timeout = None
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+        async def post(self, _url, *, headers, json):
+            self.requests.append(json)
+            request = httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
+            return httpx.Response(200, request=request, json={"choices": [{"message": {"content": __import__("json").dumps(raw_proposal)}}]})
+
+    client = DeepSeekClient()
+    monkeypatch.setattr(semantic_proof.config, "llm_api_key", "configured")
+    monkeypatch.setattr(semantic_proof.config, "llm_base_url", "https://api.deepseek.com")
+    monkeypatch.setattr(semantic_proof.httpx, "AsyncClient", lambda timeout: setattr(client, "timeout", timeout) or client)
+
+    proposal, status = asyncio.run(semantic_proof.propose_semantic_structure(graph, "en"))
+
+    assert proposal is not None
+    assert status["status"] == "proposed"
+    assert len(client.requests) == 1
+    assert client.requests[0]["response_format"] == {"type": "json_object"}
+    assert client.requests[0]["thinking"] == {"type": "disabled"}
+    assert client.requests[0]["max_tokens"] == 1200
+    assert client.timeout.read == 15.0
+
+
+def test_fragment_only_deepseek_json_object_proposal_is_expanded_source_bound():
+    import app.semantic_proof as semantic_proof
+
+    graph = _graph()
+    definition, calculation = graph["fragments"][0]["steps"][:2]
+    proposal = semantic_proof.validate_semantic_proposal({
+        "fragments": [
+            {
+                "id": "frag_definition",
+                "source_ids": [definition["id"]],
+                "kind": "definition",
+                "verification_target": "none",
+                "depends_on": [],
+                "rationale": "Define the source variable.",
+            },
+            {
+                "id": "frag_calculation",
+                "source_ids": [calculation["id"]],
+                "kind": "calculation",
+                "verification_target": "semantic",
+                "depends_on": ["frag_definition"],
+                "rationale": "Evaluate the source-bound calculation.",
+            },
+        ],
+    }, graph)
+
+    assert proposal is not None
+    by_id = {item["step_id"]: item for item in proposal["steps"]}
+    assert by_id[definition["id"]]["role"] == "definition"
+    assert by_id[calculation["id"]]["role"] == "calculation"
+    assert by_id[calculation["id"]]["depends_on"] == [definition["id"]]

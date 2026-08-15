@@ -71,3 +71,50 @@ $$
     assert snapshots.status_code == 200
     stored = snapshots.json()["snapshots"][0]["proof_graph"]
     assert stored == graph
+
+
+def test_selected_scope_with_semantic_parse_uses_scope_metadata_not_missing_kind(monkeypatch, client):
+    import app.routes.verify as verify_route
+
+    async def unavailable_semantic_parser(_graph, _locale):
+        return None, {"status": "unavailable", "reason": "test", "notice": "test"}
+
+    monkeypatch.setattr(verify_route, "propose_semantic_structure", unavailable_semantic_parser)
+    response = client.post("/api/verify", json={
+        "markdown": "# Scope\n\n$$\nx=x\n$$\n",
+        "scope": {"start_line": 3, "end_line": 5, "claim_id": "claim-1"},
+        "semantic_parse": True,
+    })
+
+    assert response.status_code == 200
+    assert response.json()["scope"] == {"kind": "claim", "start_line": 3, "end_line": 5, "claim_id": "claim-1"}
+
+
+def test_semantic_proposal_is_persisted_in_document_snapshot(monkeypatch, client):
+    import app.routes.verify as verify_route
+
+    async def semantic_parser(graph, _locale):
+        steps = [step for fragment in graph["fragments"] for step in fragment["steps"]]
+        return {
+            "fragments": [{"title": "Source calculation", "role": "calculation", "step_ids": [steps[-1]["id"]]}],
+            "steps": [{"step_id": steps[-1]["id"], "role": "calculation", "verification_target": "semantic", "rule_id": "", "depends_on": [], "rationale": "Short source-bound calculation."}],
+        }, {"status": "proposed", "reason": "", "notice": "test"}
+
+    monkeypatch.setattr(verify_route, "propose_semantic_structure", semantic_parser)
+    headers = {"X-User-Id": "researcher-semantic"}
+    created = client.post("/api/documents", headers=headers, json={"title": "Semantic snapshot"})
+    document_id = created.json()["document"]["id"]
+    response = client.post("/api/verify", headers=headers, json={
+        "document_id": document_id,
+        "markdown": "# Derivation\n\n$$\nx=x\n$$\n",
+        "semantic_parse": True,
+    })
+
+    assert response.status_code == 200
+    graph = response.json()["snapshot"]["proof_graph"]
+    assert graph["semantic_proposal"]["status"] == "proposed"
+    assert any(
+        step.get("semantic_role") == "calculation"
+        for fragment in graph["fragments"]
+        for step in fragment["steps"]
+    )

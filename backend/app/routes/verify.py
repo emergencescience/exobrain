@@ -214,19 +214,27 @@ async def verify(
         logger.info(
             "verification.semantic_parse.start document_id=%s scope=%s source_steps=%d locale=%s",
             req.document_id or "ad-hoc",
-            req.scope.kind if req.scope else "document",
+            scope_metadata["kind"],
             source_step_count,
             req.locale,
         )
         proposal, semantic_status = await propose_semantic_structure(proof_graph, req.locale)
+        logger.info(
+            "verification.semantic_parse.received document_id=%s proposal_available=%s status=%s",
+            req.document_id or "ad-hoc",
+            proposal is not None,
+            semantic_status.get("status", "unavailable"),
+        )
         llm_audit = semantic_status.pop("_llm_call_log", None)
         if document is not None and llm_audit is not None:
             try:
+                logger.info("verification.semantic_parse.audit_log.start document_id=%s", document.id)
                 await storage.save_llm_call_log(LLMCallLog(
                     document_id=document.id,
                     source_hash=content_hash,
                     **llm_audit,
                 ))
+                logger.info("verification.semantic_parse.audit_log.finish document_id=%s", document.id)
             except Exception:
                 # Observability must never replace a verification result.
                 logger.exception("verification.semantic_parse.audit_log_failed document_id=%s", document.id)
@@ -237,7 +245,9 @@ async def verify(
             semantic_status.get("reason", ""),
         )
         if proposal is not None:
+            logger.info("verification.semantic_parse.apply.start document_id=%s", req.document_id or "ad-hoc")
             proof_graph = apply_semantic_proposal(proof_graph, proposal)
+            logger.info("verification.semantic_parse.apply.finish document_id=%s", req.document_id or "ad-hoc")
         else:
             proof_graph["semantic_proposal"] = {
                 **semantic_status,
@@ -248,6 +258,7 @@ async def verify(
             )
     snapshot = None
     if document is not None:
+        logger.info("verification.snapshot.start document_id=%s", document.id)
         snapshot = await storage.save_snapshot(
             document.id,
             req.markdown,
@@ -257,6 +268,7 @@ async def verify(
             verification_scope=scope_metadata,
             proof_graph=proof_graph,
         )
+        logger.info("verification.snapshot.finish document_id=%s", document.id)
     response = {
         "snapshot": snapshot.to_dict() if snapshot else None,
         "scope": scope_metadata,

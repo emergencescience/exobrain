@@ -24,7 +24,8 @@ SEMANTIC_PROOF_SYSTEM_PROMPT = """You classify local mathematical proof source b
 
 Choose coarse, human-readable units. A contiguous display `aligned` derivation is one calculation unit, not one unit per equality sign. Combine prose immediately explaining a calculation with that calculation in the same fragment. Do not create a dependency merely because two blocks are adjacent in source order. `depends_on` must name an explicit mathematical premise, definition, theorem, substitution, or prior result actually used by the target.
 
-Use `context`, `definition`, `hypothesis`, or `lemma` with verification_target=none for facts a reader need not re-prove here. Use `calculation` with verification_target=semantic only for a short, standard derivation whose structural correctness you can assess from the supplied source; this means semantic review, NOT deterministic proof. Use sympy only for closed symbolic relations that are appropriate for deterministic evaluation. Use rule only for a named bounded rewrite or theorem-specific validator. A theorem citation is a lemma, not a verified deduction. A substitution must identify any missing functional or domain premise in its rationale. Do not claim anything verified. Return exactly one JSON object matching the requested schema; never wrap JSON in Markdown fences or explanatory prose."""
+Use `context`, `definition`, `hypothesis`, or `lemma` with verification_target=none for facts a reader need not re-prove here. Use `calculation` with verification_target=semantic only for a short, standard derivation whose structural correctness you can assess from the supplied source; this means semantic review, NOT deterministic proof. Use sympy only for closed symbolic relations that are appropriate for deterministic evaluation. Use rule only for a named bounded rewrite or theorem-specific validator. A theorem citation is a lemma, not a verified deduction. A substitution must identify any missing functional or domain premise in its rationale. Do not claim anything verified. Return exactly one JSON object matching this shape and never wrap it in Markdown fences or prose:
+{"fragments":[{"title":"short unit title","role":"calculation","step_ids":["an exact supplied step id"]}],"steps":[{"step_id":"the same exact supplied step id","role":"calculation","verification_target":"semantic","rule_id":"","depends_on":["other exact supplied step ids only"],"rationale":"short reason"}]}. Do not use fragment IDs as dependencies and do not omit the steps array."""
 
 
 def _audit_metadata(
@@ -133,6 +134,58 @@ def validate_semantic_proposal(raw: dict[str, Any], graph: dict[str, Any]) -> di
     known = {step["id"] for step in _source_payload(graph)}
     raw_steps = raw.get("steps")
     raw_fragments = raw.get("fragments")
+    # DeepSeek JSON Object mode may return a compact fragment-only proposal even
+    # when instructed to include `steps`. Expand it only when every referenced
+    # source ID is already present in this document; fragment IDs never escape
+    # this normalization boundary.
+    if not isinstance(raw_steps, list) and isinstance(raw_fragments, list):
+        fragment_sources: dict[str, list[str]] = {}
+        for index, item in enumerate(raw_fragments):
+            if not isinstance(item, dict):
+                continue
+            source_ids = item.get("source_ids", item.get("step_ids", []))
+            if isinstance(source_ids, str):
+                source_ids = [source_ids]
+            valid_ids = [source_id for source_id in source_ids if isinstance(source_id, str) and source_id in known]
+            fragment_sources[str(item.get("id", f"fragment_{index}"))] = valid_ids
+        expanded_steps: list[dict[str, Any]] = []
+        expanded_fragments: list[dict[str, Any]] = []
+        for index, item in enumerate(raw_fragments):
+            if not isinstance(item, dict):
+                continue
+            fragment_id = str(item.get("id", f"fragment_{index}"))
+            source_ids = fragment_sources.get(fragment_id, [])
+            if not source_ids:
+                continue
+            raw_dependencies = item.get("depends_on", [])
+            if isinstance(raw_dependencies, str):
+                raw_dependencies = [raw_dependencies]
+            if not isinstance(raw_dependencies, list):
+                raw_dependencies = []
+            dependencies: list[str] = []
+            for dependency in raw_dependencies:
+                if isinstance(dependency, str) and dependency in known:
+                    dependencies.append(dependency)
+                elif isinstance(dependency, str) and fragment_sources.get(dependency):
+                    dependencies.append(fragment_sources[dependency][-1])
+            role = item.get("role", item.get("kind", "context"))
+            target = item.get("verification_target", item.get("target", "none"))
+            expanded_fragments.append({
+                "title": item.get("title", item.get("name", fragment_id)),
+                "role": role,
+                "step_ids": source_ids,
+            })
+            for source_id in source_ids:
+                expanded_steps.append({
+                    "step_id": source_id,
+                    "role": role,
+                    "verification_target": target,
+                    "rule_id": item.get("rule_id", item.get("rule", "")),
+                    "depends_on": dependencies if source_id == source_ids[-1] else [],
+                    "rationale": item.get("rationale", item.get("reason", "")),
+                })
+        raw_steps = expanded_steps
+        raw_fragments = expanded_fragments
     if not isinstance(raw_steps, list):
         return None
     normalized_steps: list[dict[str, Any]] = []
@@ -219,18 +272,40 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
         locale,
     )
     try:
-        # JSON-only fallbacks lack server-side constrained decoding and can take
-        # longer on compatible reasoning providers than strict schema responses.
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        # Semantic parsing augments deterministic verification; it must never make
+        # a researcher wait on an unbounded reasoning completion. DeepSeek's
+        # OpenAI-compatible endpoint rejects JSON Schema and can otherwise spend
+        # minutes producing a tiny JSON proposal after sending response headers.
+        provider_without_json_schema = config.llm_provider_host.endswith("deepseek.com")
+        timeout = httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             request_payload = {
                 "model": config.llm_model,
                 "temperature": 0,
+                "max_tokens": 1200,
                 "messages": [
                     {"role": "system", "content": SEMANTIC_PROOF_SYSTEM_PROMPT},
                     {"role": "user", "content": json.dumps({"locale": locale, "source_steps": payload}, ensure_ascii=False)},
                 ],
-                "response_format": {"type": "json_schema", "json_schema": {"name": "semantic_proof_structure", "strict": True, "schema": _SCHEMA}},
             }
+            if provider_without_json_schema:
+                # DeepSeek documents JSON Object (not JSON Schema) and enables
+                # high-effort thinking by default. Structural classification is
+                # deliberately a short, non-reasoning operation; the deterministic
+                # verifier remains the authority for mathematical evidence.
+                request_payload["thinking"] = {"type": "disabled"}
+                request_payload["response_format"] = {"type": "json_object"}
+                structured_transport = "json_object"
+            else:
+                request_payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "semantic_proof_structure", "strict": True, "schema": _SCHEMA}}
+                structured_transport = "json_schema"
+            logger.info(
+                "semantic_parse.transport provider=%s structured_transport=%s max_tokens=%d read_timeout_seconds=%d",
+                config.llm_provider_host,
+                structured_transport,
+                request_payload["max_tokens"],
+                15,
+            )
             response = await client.post(
                 config.llm_chat_completions_url,
                 headers={"Authorization": f"Bearer {config.llm_api_key}", "Content-Type": "application/json"},
@@ -239,7 +314,7 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
             # DeepSeek and some OpenAI-compatible gateways reject JSON Schema.
             # Retry once without the transport feature; validate the returned JSON
             # locally against the same source-bound contract instead.
-            if response.status_code == 400 and "response_format type is unavailable" in response.text.lower():
+            if "response_format" in request_payload and response.status_code == 400 and "response_format type is unavailable" in response.text.lower():
                 logger.info(
                     "semantic_parse.response_format_fallback provider=%s model=%s",
                     config.llm_provider_host,
@@ -256,7 +331,23 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
                 )
             response.raise_for_status()
             raw_content = response.json()["choices"][0]["message"]["content"]
-            proposal = validate_semantic_proposal(json.loads(raw_content), graph)
+            logger.info(
+                "semantic_parse.response_received provider=%s model=%s content_chars=%d",
+                config.llm_provider_host,
+                config.llm_model,
+                len(raw_content) if isinstance(raw_content, str) else 0,
+            )
+            if not isinstance(raw_content, str):
+                raise ValueError("provider response did not contain text content")
+            parsed_content = json.loads(raw_content.removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            logger.info("semantic_parse.response_json_valid provider=%s model=%s", config.llm_provider_host, config.llm_model)
+            proposal = validate_semantic_proposal(parsed_content, graph)
+            logger.info(
+                "semantic_parse.response_validated provider=%s model=%s proposal_available=%s",
+                config.llm_provider_host,
+                config.llm_model,
+                proposal is not None,
+            )
             if proposal is None:
                 logger.warning("semantic_parse.unavailable reason=proposal_rejected")
                 return None, {
