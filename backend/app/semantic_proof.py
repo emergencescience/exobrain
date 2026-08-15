@@ -45,6 +45,33 @@ def _audit_metadata(
         "error_type": error_type,
     }
 
+
+def _response_audit_excerpt(response: httpx.Response | None, error: Exception) -> tuple[str, int | None]:
+    """Return a bounded diagnostic for a failed semantic-parser response.
+
+    A JSON decoding failure can happen after a successful HTTP status. Persisting
+    only the provider body formerly made an empty body indistinguishable from an
+    unrecorded response, so record body text when present and safe transport
+    metadata otherwise. Request credentials and headers are never persisted.
+    """
+    if response is None:
+        return (
+            f"[no HTTP response; parser_error={type(error).__name__}: {error}]"[:20000],
+            None,
+        )
+    try:
+        response_text = response.text
+    except Exception as response_text_error:  # pragma: no cover - defensive guard
+        response_text = f"[response body unreadable: {type(response_text_error).__name__}: {response_text_error}]"
+    if response_text:
+        return response_text[:20000], response.status_code
+    content_type = response.headers.get("content-type", "<missing>")
+    return (
+        f"[empty provider response body; http_status={response.status_code}; "
+        f"content_type={content_type}; parser_error={type(error).__name__}: {error}]"[:20000],
+        response.status_code,
+    )
+
 _ROLES = {"context", "definition", "hypothesis", "lemma", "calculation", "deduction", "conclusion"}
 _TARGETS = {"none", "semantic", "sympy", "rule"}
 _ROLE_ALIASES = {
@@ -266,6 +293,7 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
         len(payload),
         locale,
     )
+    response: httpx.Response | None = None
     try:
         # Semantic parsing augments deterministic verification; it must never make
         # a researcher wait on an unbounded reasoning completion. DeepSeek's
@@ -365,34 +393,35 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
             }
     except httpx.HTTPStatusError as exc:
         reason = "provider_authentication_failed" if exc.response.status_code in {401, 403} else "provider_request_failed"
+        response_text, http_status = _response_audit_excerpt(exc.response, exc)
         logger.warning(
             "semantic_parse.unavailable reason=%s provider=%s model=%s http_status=%s",
             reason,
             config.llm_provider_host,
             config.llm_model,
-            exc.response.status_code,
+            http_status,
         )
         return None, {
             "status": "unavailable",
             "reason": reason,
             "notice": "The configured semantic-parser provider did not accept this request. Check the server-side LLM configuration.",
-            "_llm_call_log": _audit_metadata(payload=payload, locale=locale, status="provider_error", response_text=exc.response.text[:20000], http_status=exc.response.status_code, error_type=type(exc).__name__),
+            "_llm_call_log": _audit_metadata(payload=payload, locale=locale, status="provider_error", response_text=response_text, http_status=http_status, error_type=type(exc).__name__),
         }
     except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        response_text, http_status = _response_audit_excerpt(response, exc)
         logger.warning(
-            "semantic_parse.unavailable reason=provider_request_failed provider=%s model=%s error_type=%s",
+            "semantic_parse.unavailable reason=provider_request_failed provider=%s model=%s error_type=%s http_status=%s",
             config.llm_provider_host,
             config.llm_model,
             type(exc).__name__,
+            http_status,
         )
         return None, {
             "status": "unavailable",
             "reason": "provider_request_failed",
             "notice": "The semantic-parser provider was unavailable; heuristic structure is shown instead.",
-            "_llm_call_log": _audit_metadata(payload=payload, locale=locale, status="provider_error", error_type=type(exc).__name__),
+            "_llm_call_log": _audit_metadata(payload=payload, locale=locale, status="provider_error", response_text=response_text, http_status=http_status, error_type=type(exc).__name__),
         }
-
-
 def apply_semantic_proposal(graph: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
     """Attach a proposal without treating the LLM as a verification authority."""
     by_id = {

@@ -319,3 +319,63 @@ def test_fragment_only_deepseek_json_object_proposal_is_expanded_source_bound():
     assert by_id[definition["id"]]["role"] == "definition"
     assert by_id[calculation["id"]]["role"] == "calculation"
     assert by_id[calculation["id"]]["depends_on"] == [definition["id"]]
+
+
+def test_semantic_parser_audits_empty_non_json_provider_response(monkeypatch):
+    import asyncio
+    import httpx
+    import app.semantic_proof as semantic_proof
+
+    class EmptyBodyClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, *_args, **_kwargs):
+            request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+            return httpx.Response(200, request=request, text="")
+
+    monkeypatch.setattr(semantic_proof.config, "llm_api_key", "configured")
+    monkeypatch.setattr(semantic_proof.config, "llm_base_url", "https://provider.test")
+    monkeypatch.setattr(semantic_proof.httpx, "AsyncClient", lambda timeout: EmptyBodyClient())
+
+    proposal, status = asyncio.run(semantic_proof.propose_semantic_structure(_graph(), "en"))
+
+    assert proposal is None
+    audit = status["_llm_call_log"]
+    assert audit["status"] == "provider_error"
+    assert audit["http_status"] == 200
+    assert audit["error_type"] == "JSONDecodeError"
+    assert "empty provider response body" in audit["response_text"]
+    assert "http_status=200" in audit["response_text"]
+
+
+def test_semantic_parser_audits_non_json_provider_body(monkeypatch):
+    import asyncio
+    import httpx
+    import app.semantic_proof as semantic_proof
+
+    class InvalidJsonClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, *_args, **_kwargs):
+            request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+            return httpx.Response(200, request=request, text="upstream gateway returned HTML")
+
+    monkeypatch.setattr(semantic_proof.config, "llm_api_key", "configured")
+    monkeypatch.setattr(semantic_proof.config, "llm_base_url", "https://provider.test")
+    monkeypatch.setattr(semantic_proof.httpx, "AsyncClient", lambda timeout: InvalidJsonClient())
+
+    proposal, status = asyncio.run(semantic_proof.propose_semantic_structure(_graph(), "en"))
+
+    assert proposal is None
+    audit = status["_llm_call_log"]
+    assert audit["http_status"] == 200
+    assert audit["error_type"] == "JSONDecodeError"
+    assert audit["response_text"] == "upstream gateway returned HTML"

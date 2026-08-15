@@ -23,7 +23,7 @@ class Config:
     llm_base_url: str = field(
         default_factory=lambda: os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
     )
-    llm_model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-5-mini"))
+    llm_model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "deepseek-v4-pro"))
 
     @property
     def llm_chat_completions_url(self) -> str:
