@@ -172,3 +172,76 @@ def test_verify_route_persists_named_semantic_parser_audit_log(client, monkeypat
     record = logs.json()["llm_call_logs"][0]
     assert record["system_prompt_name"] == "semantic-proof-structure-v1"
     assert record["response_text"] == '{"steps": []}'
+
+
+def test_semantic_calculation_upgrades_a_hidden_sequence_edge_and_flags_implicit_substitution():
+    from app.proof_fragments import build_proof_graph
+    from app.semantic_proof import apply_semantic_proposal, validate_semantic_proposal
+    from app.verify import verify_document
+
+    markdown = r"""## Derivation
+采用三角代换：令 $x=R\sin t$，$\mathrm{d}x=R\cos t\,\mathrm{d}t$。
+$$
+\begin{aligned}
+S &= 4\int_0^{\pi/2} R^2\cos^2 t\,\mathrm{d}t \\
+  &= \pi R^2.
+\end{aligned}
+$$"""
+    results = verify_document(markdown)
+    graph = build_proof_graph(markdown, [result.__dict__ for result in results])
+    steps = graph["fragments"][0]["steps"]
+    substitution, calculation = steps
+    proposal = validate_semantic_proposal({
+        "fragments": [{"title": "Trigonometric substitution calculation", "role": "calculation", "step_ids": [substitution["id"], calculation["id"]]}],
+        "steps": [
+            {"step_id": substitution["id"], "role": "calculation", "verification_target": "semantic", "rule_id": "", "depends_on": [], "rationale": "Substitution setup."},
+            {"step_id": calculation["id"], "role": "calculation", "verification_target": "semantic", "rule_id": "", "depends_on": [substitution["id"]], "rationale": "Evaluate the substituted integral."},
+        ],
+    }, graph)
+
+    assert proposal is not None
+    annotated = apply_semantic_proposal(graph, proposal)
+    edge = next(item for item in annotated["dependencies"] if item["from_step_id"] == substitution["id"] and item["to_step_id"] == calculation["id"])
+    assert edge["review_visible"] is True
+    assert edge["kind"] == "requires_assumption"
+    assert edge["edge_status"] == "declared"
+    assert "function of the parameter" in edge["reason"]
+    assert annotated["fragments"][0]["steps"][1]["local_status"] == "semantically_reviewed"
+
+
+def test_semantic_parser_retries_without_response_format_when_provider_rejects_schema(monkeypatch):
+    import asyncio
+    import json
+    import httpx
+    import app.semantic_proof as semantic_proof
+
+    graph = _graph()
+    source_step = graph["fragments"][0]["steps"][0]
+    raw_proposal = {
+        "fragments": [{"title": "Definition", "role": "definition", "step_ids": [source_step["id"]]}],
+        "steps": [{"step_id": source_step["id"], "role": "definition", "verification_target": "none", "rule_id": "", "depends_on": [], "rationale": "Definition."}],
+    }
+
+    class CompatibleClient:
+        payloads = []
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+        async def post(self, _url, *, headers, json):
+            self.payloads.append(json)
+            request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+            if len(self.payloads) == 1:
+                return httpx.Response(400, request=request, text='{"error":{"message":"This response_format type is unavailable now"}}')
+            return httpx.Response(200, request=request, json={"choices": [{"message": {"content": __import__("json").dumps(raw_proposal)}}]})
+
+    client = CompatibleClient()
+    monkeypatch.setattr(semantic_proof.config, "llm_api_key", "configured")
+    monkeypatch.setattr(semantic_proof.httpx, "AsyncClient", lambda timeout: client)
+
+    proposal, status = asyncio.run(semantic_proof.propose_semantic_structure(graph, "en"))
+
+    assert proposal is not None
+    assert status["status"] == "proposed"
+    assert "response_format" in client.payloads[0]
+    assert "response_format" not in client.payloads[1]

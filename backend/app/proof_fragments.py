@@ -172,7 +172,10 @@ def _blocks(markdown: str) -> list[SourceBlock]:
         text = "\n".join(lines[start:index]).strip()
         if text:
             block = SourceBlock(text=text, start_line=start + 1, end_line=index, section=section, section_start_line=section_start)
-            blocks.extend(_aligned_relation_blocks(block))
+            # A display calculation is one reviewable proof unit. Its
+            # internal equality chain may be inspected in Graph detail, but it
+            # must not become a wall of sequence-only Review cards.
+            blocks.append(block)
     return blocks
 
 def _result_status(block: SourceBlock, verification_results: list[dict[str, Any]]) -> str:
@@ -408,6 +411,7 @@ def build_proof_graph(markdown: str, verification_results: list[dict[str, Any]])
                 "kind": "derives",
                 "edge_status": "not_checked",
                 "reason": "Candidate local dependency inferred from source order; reviewer confirmation or a rule-specific validator is required.",
+                "review_visible": False,
             })
         assumption = _nearest_assumption(step, assumptions)
         if assumption is not None:
@@ -418,10 +422,13 @@ def build_proof_graph(markdown: str, verification_results: list[dict[str, Any]])
                 "kind": "requires_assumption",
                 "edge_status": "declared",
                 "reason": "An explicit hypothesis is available as a prerequisite; its sufficiency has not been machine-proved.",
+                "review_visible": False,
             })
         prior_step = step
 
     _add_explicit_derivation_edges(dependencies, ordered_steps, content_hash)
+    for edge in dependencies:
+        edge.setdefault("review_visible", False)
     # An aligned relation is a real source-bound transformation. If its target
     # relation was discharged deterministically, the incoming dependency—not an
     # isolated formula node—is the verified object.
@@ -432,6 +439,7 @@ def build_proof_graph(markdown: str, verification_results: list[dict[str, Any]])
             continue
         if target["local_status"] == "locally_verified":
             edge["edge_status"] = "verified"
+            edge["review_visible"] = True
             edge["reason"] = "SymPy discharged this source-bound adjacent relation."
             edge["validator"] = {
                 "id": "sympy-adjacent-relation-v1",

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Symbol Science. All rights reserved.
-"""Regression coverage for source-bound calculation relations and proof edges."""
+"""Regression coverage for coarse source-bound calculation units."""
 
 from app.proof_fragments import build_proof_graph
 from app.verify import verify_document
@@ -17,28 +17,21 @@ S
 $$"""
 
 
-def test_aligned_calculation_becomes_adjacent_relation_nodes_and_edges():
+def test_aligned_calculation_remains_one_coarse_source_bound_unit():
     results = verify_document(CIRCLE_CALCULATION)
     graph = build_proof_graph(CIRCLE_CALCULATION, [result.__dict__ for result in results])
     steps = graph["fragments"][0]["steps"]
-    relation_steps = [step for step in steps if step.get("aligned_relation")]
-    relation_edges = [
-        edge for edge in graph["dependencies"]
-        if edge["from_step_id"] in {step["id"] for step in relation_steps}
-        and edge["to_step_id"] in {step["id"] for step in relation_steps}
-    ]
 
-    assert len(relation_steps) == 5
-    assert all(step["text"].startswith("$$") for step in relation_steps)
-    assert all("\\begin{aligned}" not in step["text"] for step in relation_steps)
-    assert len(relation_edges) >= 4
-    assert any(edge["edge_status"] == "verified" for edge in relation_edges)
+    assert len(steps) == 1
+    assert steps[0]["source"] == {"start_line": 2, "end_line": 10}
+    assert "\\begin{aligned}" in steps[0]["text"]
+    assert not steps[0].get("aligned_relation")
 
 
-def test_aligned_relation_nodes_keep_row_level_source_ranges():
-    results = verify_document(CIRCLE_CALCULATION)
-    graph = build_proof_graph(CIRCLE_CALCULATION, [result.__dict__ for result in results])
-    relation_steps = [step for step in graph["fragments"][0]["steps"] if step.get("aligned_relation")]
+def test_sequence_only_edges_are_not_review_visible():
+    markdown = "## Derivation\nA premise.\n$$\nx=x\n$$"
+    results = verify_document(markdown)
+    graph = build_proof_graph(markdown, [result.__dict__ for result in results])
 
-    assert relation_steps[0]["source"]["start_line"] == 4
-    assert relation_steps[-1]["source"]["start_line"] == 8
+    assert graph["dependencies"]
+    assert all(edge.get("review_visible") is False for edge in graph["dependencies"])

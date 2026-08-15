@@ -88,8 +88,9 @@ interface ProofDependency {
   from_step_id: string;
   to_step_id: string;
   kind: "derives" | "requires_assumption" | "formula_transform" | "uses_definition" | "justifies" | "substitutes_result";
-  edge_status: "not_checked" | "declared" | "verified" | "verified_under_assumptions" | "failed";
+  edge_status: "not_checked" | "declared" | "semantically_reviewed" | "verified" | "verified_under_assumptions" | "failed";
   reason: string;
+  review_visible?: boolean;
   validator?: {
     id: string;
     label: string;
@@ -1209,7 +1210,7 @@ function ReviewPanel({
   const allSteps = proofGraph?.fragments.flatMap((fragment) => fragment.steps) || [];
   const stepById = new Map(allSteps.map((step) => [step.id, step]));
   const proofEdges = [...(proofGraph?.dependencies || [])
-    .filter((edge) => stepById.has(edge.from_step_id) && stepById.has(edge.to_step_id))
+    .filter((edge) => (edge.review_visible === true || Boolean(edge.validator)) && stepById.has(edge.from_step_id) && stepById.has(edge.to_step_id))
     .reduce((selected, edge) => {
       const key = `${edge.from_step_id}:${edge.to_step_id}`;
       const priority = (candidate: ProofGraph["dependencies"][number]) => {
@@ -1222,9 +1223,11 @@ function ReviewPanel({
     }, new Map<string, ProofGraph["dependencies"][number]>())
     .values()];
   const verifiedEdges = proofEdges.filter((edge) => edge.edge_status === "verified" || edge.edge_status === "verified_under_assumptions").length;
-  const openEdges = proofEdges.length - verifiedEdges;
+  const reviewedEdges = proofEdges.filter((edge) => edge.edge_status === "semantically_reviewed").length;
+  const openEdges = proofEdges.length - verifiedEdges - reviewedEdges;
   const edgeStatusMeta = (status: string) => {
     if (status === "verified") return { label: copy.verified, className: "border-emerald-200 bg-emerald-50 text-emerald-800", dot: "bg-emerald-500" };
+    if (status === "semantically_reviewed") return { label: lang === "zh" ? "结构审阅通过" : "Structurally reviewed", className: "border-violet-200 bg-violet-50 text-violet-800", dot: "bg-violet-500" };
     if (status === "verified_under_assumptions") return { label: lang === "zh" ? "在显式前提下成立" : "Verified under assumptions", className: "border-sky-200 bg-sky-50 text-sky-800", dot: "bg-sky-500" };
     if (status === "failed") return { label: copy.failed, className: "border-rose-200 bg-rose-50 text-rose-800", dot: "bg-rose-500" };
     if (status === "declared") return { label: lang === "zh" ? "已声明前提" : "Declared premise", className: "border-slate-200 bg-slate-50 text-slate-700", dot: "bg-slate-400" };
@@ -1265,7 +1268,7 @@ function ReviewPanel({
           </div>
           {!snapshot ? <div className="p-8 text-center"><p className="text-sm font-semibold text-slate-700">{copy.noVerification}</p><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-slate-500">{copy.noVerificationDescription}</p></div> : <>
             {view === "edges" && <div className="mt-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-900"><span>{labels.edgeSummary}</span><span className="font-semibold">{verifiedEdges} {copy.verified} · {openEdges} {labels.openEdges}</span></div>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-900"><span>{labels.edgeSummary}</span><span className="font-semibold">{verifiedEdges} {copy.verified} · {reviewedEdges} {lang === "zh" ? "结构审阅" : "structurally reviewed"} · {openEdges} {labels.openEdges}</span></div>
               {!proofEdges.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs leading-5 text-slate-500">{labels.noGraph}</div> : proofEdges.map((edge) => {
                 const source = stepById.get(edge.from_step_id)!;
                 const target = stepById.get(edge.to_step_id)!;
