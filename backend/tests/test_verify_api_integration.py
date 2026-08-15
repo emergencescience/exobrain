@@ -214,3 +214,28 @@ $$
     assert derivative["edge_type"] == "differentiation"
     assert derivative["assumption_claim_ids"] == [assumption["claim_id"]]
     assert derivative["crosses_paragraph"] is True
+
+
+def test_title_only_document_update_preserves_markdown_and_messages(client: TestClient):
+    document_id = create_document(client)
+    headers = {"X-User-Id": "researcher-1"}
+    original_markdown = "$$\nx=x\n$$"
+    original_messages = [{"role": "user", "content": "keep this history"}]
+    saved = client.patch(
+        f"/api/documents/{document_id}",
+        headers=headers,
+        json={"markdown": original_markdown, "messages": original_messages},
+    )
+    assert saved.status_code == 200
+
+    renamed = client.patch(
+        f"/api/documents/{document_id}",
+        headers=headers,
+        json={"title": "Renamed proof"},
+    )
+
+    assert renamed.status_code == 200
+    document = renamed.json()["document"]
+    assert document["title"] == "Renamed proof"
+    assert document["markdown"] == original_markdown
+    assert document["messages"] == original_messages

@@ -75,12 +75,13 @@ interface ProofStep {
   source: { start_line: number; end_line: number };
   local_status: "locally_verified" | "partially_checked" | "inconclusive" | "failed" | "not_checked";
   fragment_id: string;
+  is_formula?: boolean;
 }
 interface ProofDependency {
   id: string;
   from_step_id: string;
   to_step_id: string;
-  kind: "derives" | "requires_assumption";
+  kind: "derives" | "requires_assumption" | "formula_transform" | "uses_definition" | "justifies" | "substitutes_result";
   edge_status: "not_checked" | "declared" | "verified" | "verified_under_assumptions" | "failed";
   reason: string;
   validator?: {
@@ -421,6 +422,9 @@ export default function ExobrainClient({
   const [verifying, setVerifying] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "unsaved">("saved");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState("");
+  const [projectMenuId, setProjectMenuId] = useState<string | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
 
@@ -545,6 +549,54 @@ export default function ExobrainClient({
     }
   }, [apiBaseUrl, copy, openProject]);
 
+  const startRenameProject = useCallback((project: DocumentRecord) => {
+    setRenamingProjectId(project.id);
+    setRenameTitle(project.title || copy.documentTitle);
+    setProjectMenuId(null);
+  }, [copy.documentTitle]);
+  const commitRenameProject = useCallback(async (project: DocumentRecord) => {
+    const title = renameTitle.trim() || copy.documentTitle;
+    setRenamingProjectId(null);
+    if (title === project.title) return;
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/documents/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const updated = data.document as DocumentRecord;
+      setProjects((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
+      if (currentDocId === updated.id) setDocumentTitle(updated.title);
+    } catch {
+      setWorkspaceError(copy.apiError);
+    }
+  }, [apiBaseUrl, copy.apiError, copy.documentTitle, currentDocId, renameTitle]);
+  const duplicateProject = useCallback(async (project: DocumentRecord) => {
+    try {
+      const title = lang === "zh" ? `${project.title || copy.documentTitle} 副本` : `${project.title || copy.documentTitle} copy`;
+      const createdResponse = await fetch(`${apiBaseUrl}/api/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!createdResponse.ok) throw new Error(`HTTP ${createdResponse.status}`);
+      const created = (await createdResponse.json()).document as DocumentRecord;
+      const copiedResponse = await fetch(`${apiBaseUrl}/api/documents/${created.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markdown: project.markdown, messages: project.messages, title }),
+      });
+      if (!copiedResponse.ok) throw new Error(`HTTP ${copiedResponse.status}`);
+      const duplicated = (await copiedResponse.json()).document as DocumentRecord;
+      setProjects((previous) => [duplicated, ...previous]);
+      setProjectMenuId(null);
+      openProject(duplicated);
+    } catch {
+      setWorkspaceError(copy.apiError);
+    }
+  }, [apiBaseUrl, copy.apiError, copy.documentTitle, lang, openProject]);
   const deleteProject = useCallback(async (project: DocumentRecord) => {
     if (!window.confirm(`${copy.delete}: ${project.title}?`)) return;
     try {
@@ -778,13 +830,27 @@ export default function ExobrainClient({
               <div className="space-y-1">
                 {projects.map((project) => {
                   const active = project.id === currentDocId;
+                  const renaming = project.id === renamingProjectId;
+                  const menuOpen = project.id === projectMenuId;
+                  const menuLabels = lang === "zh"
+                    ? { actions: "文档操作", rename: "重命名", duplicate: "创建副本", delete: "删除" }
+                    : { actions: "Document actions", rename: "Rename", duplicate: "Duplicate", delete: "Delete" };
                   return (
-                    <div key={project.id} className={`group flex items-center gap-2 rounded-md border px-2 py-2 transition ${active ? "border-indigo-200 bg-indigo-50" : "border-transparent hover:bg-slate-100"}`}>
-                      <button onClick={() => openProject(project)} className="min-w-0 flex-1 text-left">
-                        <p className={`truncate text-xs font-medium ${active ? "text-indigo-900" : "text-slate-700"}`}>{project.title || copy.documentTitle}</p>
-                        <p className="mt-0.5 truncate text-[10px] text-slate-400">{formatDate(project.updated_at, lang)}</p>
-                      </button>
-                      <button onClick={() => void deleteProject(project)} aria-label={`${copy.delete} ${project.title}`} className="hidden rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600 group-hover:block">×</button>
+                    <div key={project.id} onContextMenu={(event) => { event.preventDefault(); setProjectMenuId(menuOpen ? null : project.id); }} onKeyDown={(event) => { if (active && event.key === "F2") { event.preventDefault(); startRenameProject(project); } }} className={`group relative flex items-center gap-2 rounded-md border px-2 py-2 transition ${active ? "border-indigo-200 bg-indigo-50" : "border-transparent hover:bg-slate-100"}`}>
+                      {renaming ? (
+                        <input autoFocus value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} onBlur={() => void commitRenameProject(project)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void commitRenameProject(project); } if (event.key === "Escape") { setRenamingProjectId(null); } }} aria-label={menuLabels.rename} className="min-w-0 flex-1 rounded border border-indigo-300 bg-white px-1.5 py-1 text-xs font-medium text-slate-800 outline-none ring-2 ring-indigo-100" />
+                      ) : (
+                        <button onClick={() => openProject(project)} className="min-w-0 flex-1 text-left">
+                          <p className={`truncate text-xs font-medium ${active ? "text-indigo-900" : "text-slate-700"}`}>{project.title || copy.documentTitle}</p>
+                          <p className="mt-0.5 truncate text-[10px] text-slate-400">{formatDate(project.updated_at, lang)}</p>
+                        </button>
+                      )}
+                      {!renaming && <button type="button" onClick={(event) => { event.stopPropagation(); setProjectMenuId(menuOpen ? null : project.id); }} aria-label={menuLabels.actions} aria-haspopup="menu" aria-expanded={menuOpen} className="rounded p-1 text-slate-400 transition hover:bg-white hover:text-indigo-700 group-hover:block focus:block">•••</button>}
+                      {menuOpen && <div role="menu" className="absolute right-1 top-9 z-30 w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-lg ring-1 ring-slate-950/5">
+                        <button role="menuitem" onClick={() => startRenameProject(project)} className="block w-full rounded px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">{menuLabels.rename}</button>
+                        <button role="menuitem" onClick={() => void duplicateProject(project)} className="block w-full rounded px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">{menuLabels.duplicate}</button>
+                        <button role="menuitem" onClick={() => { setProjectMenuId(null); void deleteProject(project); }} className="block w-full rounded px-2 py-1.5 text-left text-xs text-rose-700 hover:bg-rose-50">{menuLabels.delete}</button>
+                      </div>}
                     </div>
                   );
                 })}
@@ -1062,6 +1128,14 @@ function LabelDocument({
   );
 }
 
+function PrettyFormula({ source, compact = false }: { source: string; compact?: boolean }) {
+  return (
+    <div className={`exobrain-prose overflow-x-auto rounded-lg border border-slate-100 bg-slate-50/80 px-3 py-2 text-slate-800 ${compact ? "text-xs" : "text-sm"}`}>
+      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{source}</ReactMarkdown>
+    </div>
+  );
+}
+
 function ReviewPanel({
   copy,
   lang,
@@ -1101,7 +1175,7 @@ function ReviewPanel({
   onFocusSource: (line: number) => void;
   onSelectSnapshot: (snapshot: VerificationSnapshot) => void;
 }) {
-  const [view, setView] = useState<"claims" | "graph" | "evidence">("claims");
+  const [view, setView] = useState<"map" | "claims" | "graph" | "evidence">("map");
   const claims = results.filter((result) => result.claim_type !== "definition");
   const verified = claims.filter((result) => result.status === "verified").length;
   const needsReview = claims.length - verified;
@@ -1110,8 +1184,8 @@ function ReviewPanel({
     return accumulator;
   }, {});
   const labels = lang === "zh"
-    ? { claims: "主张", graph: "证明依赖图", evidence: "执行证据", history: "快照历史", scope: "验证范围", source: "在源码中查看", selected: "验证该主张", block: "验证选中区块", noEvidence: "这个快照中还没有关联的执行证据。", noGraph: "尚未提取可显示的证明依赖。", execution: "执行结果", parent: "上游主张", assumptions: "依赖假设" }
-    : { claims: "Claims", graph: "Proof dependency graph", evidence: "Execution evidence", history: "Snapshot history", scope: "Verification scope", source: "View source", selected: "Verify this claim", block: "Verify selected block", noEvidence: "No execution evidence is linked to this snapshot yet.", noGraph: "No proof dependencies were extracted for this snapshot.", execution: "Execution result", parent: "Upstream claim", assumptions: "Assumptions" };
+    ? { map: "证明地图", claims: "主张", graph: "图谱细节", evidence: "执行证据", history: "快照历史", scope: "验证范围", source: "在源码中查看", selected: "验证该主张", block: "验证选中区块", noEvidence: "这个快照中还没有关联的执行证据。", noGraph: "尚未提取可显示的证明依赖。", execution: "执行结果", parent: "上游主张", assumptions: "依赖假设", sourceLatex: "查看源码 LaTeX" }
+    : { map: "Proof map", claims: "Claims", graph: "Graph detail", evidence: "Execution evidence", history: "Snapshot history", scope: "Verification scope", source: "View source", selected: "Verify this claim", block: "Verify selected block", noEvidence: "No execution evidence is linked to this snapshot yet.", noGraph: "No proof dependencies were extracted for this snapshot.", execution: "Execution result", parent: "Upstream claim", assumptions: "Assumptions", sourceLatex: "View source LaTeX" };
   const selectedClaim = claims.find((item) => item.claim_id === selectedClaimId) || null;
 
   return (
@@ -1159,7 +1233,7 @@ function ReviewPanel({
             </div>
 
             <div className="mt-4 flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
-              {(["claims", "graph", "evidence"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition ${view === item ? "bg-indigo-50 text-indigo-700" : "text-slate-500 hover:text-slate-800"}`}>{item === "claims" ? labels.claims : item === "graph" ? labels.graph : labels.evidence}</button>)}
+              {(["map", "claims", "graph", "evidence"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition ${view === item ? "bg-indigo-50 text-indigo-700" : "text-slate-500 hover:text-slate-800"}`}>{item === "map" ? labels.map : item === "claims" ? labels.claims : item === "graph" ? labels.graph : labels.evidence}</button>)}
             </div>
 
             {view === "claims" && <div className="mt-4 space-y-3">
@@ -1171,7 +1245,8 @@ function ReviewPanel({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ${meta.className}`}><span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}</span><span className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">{result.claim_type || copy.claim}</span>{linked.length > 0 && <span className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-700">{linked.length} {labels.evidence}</span>}</div>
-                      <div className="mt-3 overflow-x-auto rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700"><span className="text-slate-400">{copy.claim}: </span>{displayEquation(result.equation)}</div>
+                      <PrettyFormula source={result.equation} />
+                      <details className="mt-2 text-[11px] text-slate-500"><summary className="cursor-pointer font-medium hover:text-indigo-700">{labels.sourceLatex}</summary><pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-2 text-[10px] leading-4 text-slate-100">{result.equation}</pre></details>
                       <p className="mt-3 text-xs leading-5 text-slate-600">{result.detail}</p>
                       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-400"><span>{copy.sourceRange} L{result.line}{result.end_line !== result.line ? `–${result.end_line}` : ""}</span>{result.assumption_claim_ids?.length ? <span>{result.assumption_claim_ids.length} {copy.assumptions}</span> : null}{result.parent_claim_id ? <span>{copy.provenance}</span> : null}</div>
                     </div>
@@ -1181,6 +1256,9 @@ function ReviewPanel({
               })}
             </div>}
 
+            {view === "map" && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              {proofGraph?.fragments?.length ? <ProofMap graph={proofGraph} lang={lang} onFocusSource={onFocusSource} /> : <p className="text-xs leading-5 text-slate-500">{labels.noGraph}</p>}
+            </div>}
             {view === "graph" && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               {proofGraph?.fragments?.length ? <ProofDependencyGraph graph={proofGraph} lang={lang} onFocusSource={onFocusSource} /> : <p className="text-xs leading-5 text-slate-500">{labels.noGraph}</p>}
             </div>}
@@ -1197,6 +1275,38 @@ function ReviewPanel({
       </div>
     </div>
   );
+}
+
+function ProofMap({ graph, lang, onFocusSource }: { graph: ProofGraph; lang: "en" | "zh"; onFocusSource: (line: number) => void }) {
+  const labels = lang === "zh"
+    ? { assumptions: "前提", claim: "命题", derivation: "推导", context: "上下文", verified: "已有确定性证据", review: "仍有证明义务", structure: "结构上下文", formulas: "公式步骤", source: "定位源码", edge: "关系边" }
+    : { assumptions: "Assumptions", claim: "Claim", derivation: "Derivation", context: "Context", verified: "Deterministic evidence present", review: "Proof obligations remain", structure: "Structural context", formulas: "Formula steps", source: "View source", edge: "Dependency" };
+  const fragmentLabel: Record<ProofFragment["kind"], string> = { assumptions: labels.assumptions, claim: labels.claim, derivation: labels.derivation, context: labels.context };
+  const stepById = new Map(graph.fragments.flatMap((fragment) => fragment.steps).map((step) => [step.id, step]));
+  return <div className="mx-auto max-w-3xl">
+    <div className="mb-4 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs leading-5 text-indigo-900">{lang === "zh" ? "按原文顺序展示局部 proof fragments。颜色仅概括已存在的确定性证据；灰色关系边仍是待验证的 proof obligation。" : "Local proof fragments follow source order. Color summarizes existing deterministic evidence only; gray dependency edges remain open proof obligations."}</div>
+    <div className="space-y-0">
+      {graph.fragments.map((fragment, index) => {
+        const formulaSteps = fragment.steps.filter((step) => step.is_formula);
+        const formulaIds = new Set(formulaSteps.map((step) => step.id));
+        const incidentEdges = graph.dependencies.filter((edge) => fragment.steps.some((step) => step.id === edge.from_step_id || step.id === edge.to_step_id));
+        const hasVerifiedEdge = incidentEdges.some((edge) => edge.edge_status === "verified" || edge.edge_status === "verified_under_assumptions");
+        const hasOpenFormula = formulaSteps.some((step) => step.local_status === "inconclusive" || step.local_status === "partially_checked" || step.local_status === "not_checked");
+        const status = formulaSteps.length === 0 ? "structure" : hasVerifiedEdge && !hasOpenFormula ? "verified" : "review";
+        const tone = status === "verified" ? "border-emerald-200 bg-emerald-50/70" : status === "review" ? "border-amber-200 bg-amber-50/60" : "border-slate-200 bg-white";
+        const statusText = status === "verified" ? labels.verified : status === "review" ? labels.review : labels.structure;
+        const statusTextTone = status === "verified" ? "text-emerald-800" : status === "review" ? "text-amber-800" : "text-slate-600";
+        return <div key={fragment.id} className="relative">
+          {index > 0 && <div aria-hidden className="mx-auto h-6 w-px bg-slate-300"><span className="relative -left-1.5 top-4 block h-0 w-0 border-x-[3px] border-t-[5px] border-x-transparent border-t-slate-300" /></div>}
+          <section className={`rounded-xl border p-4 shadow-sm ${tone}`}>
+            <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{fragmentLabel[fragment.kind]}</p><h3 className="mt-1 text-sm font-semibold text-slate-800">{fragment.title}</h3><p className={`mt-1 text-[11px] font-medium ${statusTextTone}`}>{statusText}</p></div><button onClick={() => onFocusSource(fragment.source.start_line)} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-indigo-700 transition hover:border-indigo-200 hover:bg-indigo-50">{labels.source} · L{fragment.source.start_line}–{fragment.source.end_line}</button></div>
+            {formulaSteps.length > 0 ? <div className="mt-3 space-y-2">{formulaSteps.map((step) => <button key={step.id} type="button" onClick={() => onFocusSource(step.source.start_line)} className="block w-full rounded-lg border border-white/80 bg-white p-3 text-left shadow-sm transition hover:border-indigo-200 hover:ring-2 hover:ring-indigo-100"><div className="flex items-center justify-between gap-3"><span className="text-[10px] font-medium text-slate-400">{labels.formulas}</span><span className="text-[10px] font-semibold text-indigo-600">L{step.source.start_line}–{step.source.end_line}</span></div><div className="pointer-events-none mt-2"><PrettyFormula source={step.text} compact /></div></button>)}</div> : <p className="mt-3 rounded-lg border border-dashed border-slate-200 bg-white/80 px-3 py-2 text-xs leading-5 text-slate-500">{lang === "zh" ? "该 fragment 保留了证明结构与来源上下文；它本身不是独立可执行的公式义务。" : "This fragment retains proof structure and source context; it is not an independently executable formula obligation."}</p>}
+            {incidentEdges.length > 0 && <details className="mt-3 border-t border-slate-200/70 pt-3"><summary className="cursor-pointer text-xs font-semibold text-slate-700">{labels.edge} · {incidentEdges.length}</summary><div className="mt-2 space-y-1.5">{incidentEdges.slice(0, 6).map((edge) => { const source = stepById.get(edge.from_step_id); const target = stepById.get(edge.to_step_id); return <button key={edge.id} type="button" onClick={() => onFocusSource((target || source)?.source.start_line || fragment.source.start_line)} className={`block w-full rounded-md border px-2.5 py-2 text-left text-[10px] leading-4 ${edge.edge_status === "verified" ? "border-emerald-100 bg-emerald-50 text-emerald-900" : edge.edge_status === "verified_under_assumptions" ? "border-sky-100 bg-sky-50 text-sky-900" : "border-slate-100 bg-white/80 text-slate-600"}`}><span className="font-semibold">{edge.kind.replaceAll("_", " ")} · {edge.edge_status.replaceAll("_", " ")}</span><span className="block opacity-80">{edge.reason}</span></button>; })}</div></details>}
+          </section>
+        </div>;
+      })}
+    </div>
+  </div>;
 }
 
 function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGraph; lang: "en" | "zh"; onFocusSource: (line: number) => void }) {
@@ -1241,7 +1351,7 @@ function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGrap
         <div className="flex items-center justify-between gap-3"><p className="text-xs font-semibold text-slate-700">{fragment.title}</p><button onClick={() => onFocusSource(fragment.source.start_line)} className="text-[10px] font-medium text-indigo-600">L{fragment.source.start_line}–{fragment.source.end_line}</button></div>
         <div className="mt-3 space-y-2">{fragment.steps.map((step) => {
           const inbound = graph.dependencies.filter((edge) => edge.to_step_id === step.id);
-          return <article key={step.id} className="rounded-md border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-indigo-50 px-1.5 py-1 text-[10px] font-semibold text-indigo-700">{kindLabel[step.kind]}</span><span className={`rounded px-1.5 py-1 text-[10px] font-medium ${statusTone[step.local_status]}`}>{statusLabel[step.local_status]}</span></div><button onClick={() => onFocusSource(step.source.start_line)} className="text-[10px] font-medium text-indigo-600">L{step.source.start_line}–{step.source.end_line}</button></div><p className="mt-2 line-clamp-3 whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-600">{step.text}</p>{inbound.length > 0 && <div className="mt-3 space-y-2 border-t border-slate-100 pt-2">{inbound.map((edge) => { const source = byId.get(edge.from_step_id); const edgeLabel = edge.edge_status === "verified" ? labels.verified : edge.edge_status === "verified_under_assumptions" ? labels.conditional : edge.edge_status === "declared" ? labels.declared : labels.unchecked; const edgeTone = edge.edge_status === "verified" ? "border-emerald-100 bg-emerald-50/60 text-emerald-900" : edge.edge_status === "verified_under_assumptions" ? "border-sky-100 bg-sky-50/60 text-sky-900" : edge.edge_status === "declared" ? "border-amber-100 bg-amber-50/60 text-amber-900" : "border-slate-100 bg-slate-50 text-slate-600"; return <div key={edge.id} className={`rounded-md border px-2.5 py-2 text-[10px] leading-4 ${edgeTone}`}><p className="font-semibold">{edgeLabel}: {relationLabel[edge.kind] ?? edge.kind} · {source ? `${kindLabel[source.kind]} · L${source.source.start_line}` : edge.from_step_id}</p><p className="mt-1 opacity-80">{edge.reason}</p>{edge.validator && <details className="mt-2"><summary className="cursor-pointer font-semibold">{labels.deterministicEvidence} · {edge.validator.label}</summary><p className="mt-1 opacity-80">{edge.validator.method}</p><pre className="mt-2 overflow-auto rounded bg-white/70 p-2 text-[9px] text-slate-700">{JSON.stringify(edge.validator.evidence, null, 2)}</pre></details>}</div>; })}</div>}</article>;
+          return <article key={step.id} className="rounded-md border border-slate-200 bg-white p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-indigo-50 px-1.5 py-1 text-[10px] font-semibold text-indigo-700">{kindLabel[step.kind]}</span><span className={`rounded px-1.5 py-1 text-[10px] font-medium ${statusTone[step.local_status]}`}>{statusLabel[step.local_status]}</span></div><button onClick={() => onFocusSource(step.source.start_line)} className="text-[10px] font-medium text-indigo-600">L{step.source.start_line}–{step.source.end_line}</button></div><PrettyFormula source={step.text} compact /><details className="mt-2 text-[10px] text-slate-500"><summary className="cursor-pointer font-medium hover:text-indigo-700">{lang === "zh" ? "查看源码 LaTeX" : "View source LaTeX"}</summary><pre className="mt-2 overflow-x-auto rounded bg-slate-950 p-2 text-[9px] leading-4 text-slate-100">{step.text}</pre></details>{inbound.length > 0 && <div className="mt-3 space-y-2 border-t border-slate-100 pt-2">{inbound.map((edge) => { const source = byId.get(edge.from_step_id); const edgeLabel = edge.edge_status === "verified" ? labels.verified : edge.edge_status === "verified_under_assumptions" ? labels.conditional : edge.edge_status === "declared" ? labels.declared : labels.unchecked; const edgeTone = edge.edge_status === "verified" ? "border-emerald-100 bg-emerald-50/60 text-emerald-900" : edge.edge_status === "verified_under_assumptions" ? "border-sky-100 bg-sky-50/60 text-sky-900" : edge.edge_status === "declared" ? "border-amber-100 bg-amber-50/60 text-amber-900" : "border-slate-100 bg-slate-50 text-slate-600"; return <div key={edge.id} className={`rounded-md border px-2.5 py-2 text-[10px] leading-4 ${edgeTone}`}><p className="font-semibold">{edgeLabel}: {relationLabel[edge.kind] ?? edge.kind} · {source ? `${kindLabel[source.kind]} · L${source.source.start_line}` : edge.from_step_id}</p><p className="mt-1 opacity-80">{edge.reason}</p>{edge.validator && <details className="mt-2"><summary className="cursor-pointer font-semibold">{labels.deterministicEvidence} · {edge.validator.label}</summary><p className="mt-1 opacity-80">{edge.validator.method}</p><pre className="mt-2 overflow-auto rounded bg-white/70 p-2 text-[9px] text-slate-700">{JSON.stringify(edge.validator.evidence, null, 2)}</pre></details>}</div>; })}</div>}</article>;
         })}</div>
       </section>)}
     </div>

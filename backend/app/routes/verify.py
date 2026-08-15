@@ -220,5 +220,4 @@ async def verify(
         "results": [result.model_dump() for result in results],
         "snapshot": snapshot.to_dict() if snapshot else None,
         "scope": scope_metadata,
-        "proof_graph": proof_graph,
     }

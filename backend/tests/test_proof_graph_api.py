@@ -55,7 +55,8 @@ $$
     )
     assert response.status_code == 200
     body = response.json()
-    graph = body["proof_graph"]
+    assert "proof_graph" not in body
+    graph = body["snapshot"]["proof_graph"]
     assert graph["schema_version"] == "proof-dependency-graph-v1"
     assert graph["fragments"]
     assert any(
