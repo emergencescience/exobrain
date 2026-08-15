@@ -97,6 +97,42 @@ class ExecutionArtifact:
 
 
 @dataclass
+class LLMCallLog:
+    """Immutable audit record for one server-side LLM request, without secrets."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    document_id: str = ""
+    source_hash: str = ""
+    call_name: str = ""
+    system_prompt_name: str = ""
+    provider: str = ""
+    model: str = ""
+    request_payload: dict = field(default_factory=dict)
+    response_text: str = ""
+    status: str = ""
+    http_status: int | None = None
+    error_type: str = ""
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "document_id": self.document_id,
+            "source_hash": self.source_hash,
+            "call_name": self.call_name,
+            "system_prompt_name": self.system_prompt_name,
+            "provider": self.provider,
+            "model": self.model,
+            "request_payload": self.request_payload,
+            "response_text": self.response_text,
+            "status": self.status,
+            "http_status": self.http_status,
+            "error_type": self.error_type,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass
 class ClaimEvidenceLink:
     """An explicit user-approved link from an execution artifact to one claim."""
 

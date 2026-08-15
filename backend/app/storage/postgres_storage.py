@@ -13,6 +13,7 @@ from app.storage import (
     ClaimEvidenceLink,
     Document,
     ExecutionArtifact,
+    LLMCallLog,
     Snapshot,
     SnapshotShare,
 )
@@ -101,6 +102,23 @@ class PostgresStorage:
                     ON exobrain_execution_artifacts(document_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_exo_claim_evidence_snapshot
                     ON exobrain_claim_evidence_links(snapshot_id, claim_id);
+                CREATE TABLE IF NOT EXISTS exobrain_llm_call_logs (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT REFERENCES exobrain_documents(id) ON DELETE SET NULL,
+                    source_hash TEXT NOT NULL DEFAULT '',
+                    call_name TEXT NOT NULL,
+                    system_prompt_name TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    request_payload JSONB NOT NULL DEFAULT '{}',
+                    response_text TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    http_status INTEGER,
+                    error_type TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_exo_llm_call_logs_document
+                    ON exobrain_llm_call_logs(document_id, created_at DESC);
             """)
             conn.commit()
             cur.close()
@@ -526,3 +544,50 @@ class PostgresStorage:
             )
             for row in rows
         ]
+
+    async def save_llm_call_log(self, log: LLMCallLog) -> LLMCallLog:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO exobrain_llm_call_logs
+                    (id, document_id, source_hash, call_name, system_prompt_name, provider, model,
+                     request_payload, response_text, status, http_status, error_type, created_at)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s)""",
+                (
+                    log.id, log.document_id or None, log.source_hash, log.call_name, log.system_prompt_name,
+                    log.provider, log.model, json.dumps(log.request_payload, ensure_ascii=False),
+                    log.response_text, log.status, log.http_status, log.error_type, log.created_at,
+                ),
+            )
+            conn.commit()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        return log
+
+    async def list_llm_call_logs(self, document_id: str, limit: int = 50) -> list[LLMCallLog]:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT id, document_id, source_hash, call_name, system_prompt_name, provider, model,
+                          request_payload, response_text, status, http_status, error_type, created_at
+                   FROM exobrain_llm_call_logs WHERE document_id=%s ORDER BY created_at DESC LIMIT %s""",
+                (document_id, min(max(limit, 1), 200)),
+            )
+            rows = cur.fetchall()
+            cur.close()
+        finally:
+            pool.putconn(conn)
+        logs = []
+        for row in rows:
+            created_at = row[12].isoformat() if isinstance(row[12], datetime) else row[12]
+            logs.append(LLMCallLog(
+                id=row[0], document_id=row[1] or "", source_hash=row[2], call_name=row[3],
+                system_prompt_name=row[4], provider=row[5], model=row[6], request_payload=row[7] or {},
+                response_text=row[8], status=row[9], http_status=row[10], error_type=row[11], created_at=created_at,
+            ))
+        return logs

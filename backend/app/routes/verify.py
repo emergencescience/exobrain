@@ -9,8 +9,8 @@ from pydantic import BaseModel
 from app.config import config
 from app.proof_fragments import build_proof_graph
 from app.semantic_proof import apply_semantic_proposal, propose_semantic_structure
-from app.storage import StorageProtocol, get_storage
-from app.verify import verify_document
+from app.storage import LLMCallLog, StorageProtocol, get_storage
+from app.verify import normalize_latex_storage, verify_document
 
 logger = logging.getLogger("exobrain.verify")
 router = APIRouter(prefix="/api", tags=["verify"])
@@ -155,7 +155,7 @@ async def verify(
             (
                 result.line,
                 end_line,
-                result.equation,
+                normalize_latex_storage(result.equation),
                 result.status,
                 result.detail,
                 _claim_type(result.equation, result.detail, index),
@@ -219,6 +219,17 @@ async def verify(
             req.locale,
         )
         proposal, semantic_status = await propose_semantic_structure(proof_graph, req.locale)
+        llm_audit = semantic_status.pop("_llm_call_log", None)
+        if document is not None and llm_audit is not None:
+            try:
+                await storage.save_llm_call_log(LLMCallLog(
+                    document_id=document.id,
+                    source_hash=content_hash,
+                    **llm_audit,
+                ))
+            except Exception:
+                # Observability must never replace a verification result.
+                logger.exception("verification.semantic_parse.audit_log_failed document_id=%s", document.id)
         logger.info(
             "verification.semantic_parse.finish document_id=%s status=%s reason=%s",
             req.document_id or "ad-hoc",
@@ -256,3 +267,18 @@ async def verify(
     if snapshot is None:
         response["results"] = [result.model_dump() for result in results]
     return response
+
+
+@router.get("/documents/{document_id}/llm-call-logs")
+async def list_llm_call_logs(
+    document_id: str,
+    limit: int = 50,
+    storage: StorageProtocol = Depends(get_storage),
+    user_id: str = Depends(get_user_id),
+):
+    """Return credential-free LLM audit records for the document owner only."""
+    document = await storage.get_document(document_id)
+    if document is None or document.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Document not found")
+    logs = await storage.list_llm_call_logs(document_id, limit=limit)
+    return {"llm_call_logs": [log.to_dict() for log in logs]}

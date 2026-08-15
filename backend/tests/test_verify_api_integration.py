@@ -252,3 +252,17 @@ def test_ad_hoc_verify_keeps_results_without_snapshot(client: TestClient):
     body = response.json()
     assert body["snapshot"] is None
     assert body["results"][0]["status"] == "verified"
+
+
+def test_persisted_result_equation_uses_delimiter_free_latex(client: TestClient):
+    document_id = create_document(client)
+    response = client.post(
+        "/api/verify",
+        headers={"X-User-Id": "researcher-1"},
+        json={"document_id": document_id, "markdown": "$$\nx=x\n$$", "locale": "en"},
+    )
+
+    assert response.status_code == 200
+    equation = response.json()["snapshot"]["verification_results"][0]["equation"]
+    assert equation == "x=x"
+    assert not equation.startswith("$")

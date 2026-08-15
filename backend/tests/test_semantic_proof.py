@@ -130,3 +130,45 @@ def test_semantic_parser_reports_provider_authentication_failure(monkeypatch):
     assert proposal is None
     assert status["reason"] == "provider_authentication_failed"
     assert status["status"] == "unavailable"
+
+
+def test_verify_route_persists_named_semantic_parser_audit_log(client, monkeypatch):
+    from app.routes import verify as verify_route
+
+    headers = {"X-User-Id": "researcher-1"}
+    document_id = client.post("/api/documents", headers=headers, json={"title": "Semantic audit"}).json()["document"]["id"]
+
+    async def fake_proposal(graph, locale):
+        step = graph["fragments"][0]["steps"][0]
+        return ({
+            "fragments": [{"title": "Definition", "role": "definition", "step_ids": [step["id"]]}],
+            "steps": [{"step_id": step["id"], "role": "definition", "verification_target": "none", "rule_id": "", "depends_on": [], "rationale": "definition"}],
+        }, {
+            "status": "proposed",
+            "reason": "",
+            "notice": "Source-bound LLM structure proposal available.",
+            "_llm_call_log": {
+                "call_name": "semantic_proof_structure",
+                "system_prompt_name": "semantic-proof-structure-v1",
+                "provider": "provider.test",
+                "model": "test-model",
+                "request_payload": {"locale": locale, "source_steps": [{"id": step["id"]}]},
+                "response_text": '{"steps": []}',
+                "status": "proposed",
+                "http_status": 200,
+                "error_type": "",
+            },
+        })
+
+    monkeypatch.setattr(verify_route, "propose_semantic_structure", fake_proposal)
+    response = client.post(
+        "/api/verify",
+        headers=headers,
+        json={"document_id": document_id, "markdown": "## Derivation\n$$\nx=x\n$$", "locale": "en", "semantic_parse": True},
+    )
+    assert response.status_code == 200
+    logs = client.get(f"/api/documents/{document_id}/llm-call-logs", headers=headers)
+    assert logs.status_code == 200
+    record = logs.json()["llm_call_logs"][0]
+    assert record["system_prompt_name"] == "semantic-proof-structure-v1"
+    assert record["response_text"] == '{"steps": []}'

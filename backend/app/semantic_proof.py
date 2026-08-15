@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from hashlib import sha256
 from typing import Any
 
 import httpx
@@ -16,6 +17,32 @@ import httpx
 from app.config import config
 
 logger = logging.getLogger("exobrain.semantic_proof")
+
+SEMANTIC_PROOF_SYSTEM_PROMPT_NAME = "semantic-proof-structure-v1"
+SEMANTIC_PROOF_SYSTEM_PROMPT = """You classify local mathematical proof source blocks. Return a structural proposal, not proof evidence. Preserve the supplied IDs and never invent a step. Definitions, hypotheses, and cited lemmas use verification_target=none. A deduction uses sympy only for closed local algebra/calculation; use rule for a named bounded rewrite or theorem-specific validator. A theorem citation is a lemma, not a verified deduction. An approximation with an omitted remainder must remain rule and identify the missing error-bound obligation. Do not claim anything verified."""
+
+
+def _audit_metadata(
+    *,
+    payload: list[dict[str, Any]],
+    locale: str,
+    status: str,
+    response_text: str = "",
+    http_status: int | None = None,
+    error_type: str = "",
+) -> dict[str, Any]:
+    """Return the credential-free audit payload for one semantic parser call."""
+    return {
+        "call_name": "semantic_proof_structure",
+        "system_prompt_name": SEMANTIC_PROOF_SYSTEM_PROMPT_NAME,
+        "provider": config.llm_provider_host,
+        "model": config.llm_model,
+        "request_payload": {"locale": locale, "source_steps": payload},
+        "response_text": response_text,
+        "status": status,
+        "http_status": http_status,
+        "error_type": error_type,
+    }
 
 _ROLES = {"definition", "hypothesis", "lemma", "deduction", "conclusion"}
 _TARGETS = {"none", "sympy", "rule"}
@@ -137,7 +164,6 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
         len(payload),
         locale,
     )
-    system = """You classify local mathematical proof source blocks. Return a structural proposal, not proof evidence. Preserve the supplied IDs and never invent a step. Definitions, hypotheses, and cited lemmas use verification_target=none. A deduction uses sympy only for closed local algebra/calculation; use rule for a named bounded rewrite or theorem-specific validator. A theorem citation is a lemma, not a verified deduction. An approximation with an omitted remainder must remain rule and identify the missing error-bound obligation. Do not claim anything verified."""
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
             response = await client.post(
@@ -147,7 +173,7 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
                     "model": config.llm_model,
                     "temperature": 0,
                     "messages": [
-                        {"role": "system", "content": system},
+                        {"role": "system", "content": SEMANTIC_PROOF_SYSTEM_PROMPT},
                         {"role": "user", "content": json.dumps({"locale": locale, "source_steps": payload}, ensure_ascii=False)},
                     ],
                     "response_format": {"type": "json_schema", "json_schema": {"name": "semantic_proof_structure", "strict": True, "schema": _SCHEMA}},
@@ -158,14 +184,24 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
             proposal = validate_semantic_proposal(json.loads(raw_content), graph)
             if proposal is None:
                 logger.warning("semantic_parse.unavailable reason=proposal_rejected")
-                return None, {"status": "unavailable", "reason": "proposal_rejected", "notice": "The LLM response could not be tied safely to the document source steps."}
+                return None, {
+                    "status": "unavailable",
+                    "reason": "proposal_rejected",
+                    "notice": "The LLM response could not be tied safely to the document source steps.",
+                    "_llm_call_log": _audit_metadata(payload=payload, locale=locale, status="rejected", response_text=raw_content),
+                }
             logger.info(
                 "semantic_parse.proposed fragments=%d steps=%d model=%s",
                 len(proposal["fragments"]),
                 len(proposal["steps"]),
                 config.llm_model,
             )
-            return proposal, {"status": "proposed", "reason": "", "notice": "Source-bound LLM structure proposal available."}
+            return proposal, {
+                "status": "proposed",
+                "reason": "",
+                "notice": "Source-bound LLM structure proposal available.",
+                "_llm_call_log": _audit_metadata(payload=payload, locale=locale, status="proposed", response_text=raw_content, http_status=response.status_code),
+            }
     except httpx.HTTPStatusError as exc:
         reason = "provider_authentication_failed" if exc.response.status_code in {401, 403} else "provider_request_failed"
         logger.warning(
@@ -175,7 +211,12 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
             config.llm_model,
             exc.response.status_code,
         )
-        return None, {"status": "unavailable", "reason": reason, "notice": "The configured semantic-parser provider did not accept this request. Check the server-side LLM configuration."}
+        return None, {
+            "status": "unavailable",
+            "reason": reason,
+            "notice": "The configured semantic-parser provider did not accept this request. Check the server-side LLM configuration.",
+            "_llm_call_log": _audit_metadata(payload=payload, locale=locale, status="provider_error", response_text=exc.response.text[:20000], http_status=exc.response.status_code, error_type=type(exc).__name__),
+        }
     except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         logger.warning(
             "semantic_parse.unavailable reason=provider_request_failed provider=%s model=%s error_type=%s",
@@ -183,7 +224,12 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
             config.llm_model,
             type(exc).__name__,
         )
-        return None, {"status": "unavailable", "reason": "provider_request_failed", "notice": "The semantic-parser provider was unavailable; heuristic structure is shown instead."}
+        return None, {
+            "status": "unavailable",
+            "reason": "provider_request_failed",
+            "notice": "The semantic-parser provider was unavailable; heuristic structure is shown instead.",
+            "_llm_call_log": _audit_metadata(payload=payload, locale=locale, status="provider_error", error_type=type(exc).__name__),
+        }
 
 
 def apply_semantic_proposal(graph: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
@@ -204,10 +250,45 @@ def apply_semantic_proposal(graph: dict[str, Any], proposal: dict[str, Any]) -> 
         # This is a classification label, not mathematical evidence.
         if annotation["role"] in {"definition", "hypothesis", "lemma"} and annotation["verification_target"] == "none":
             step["local_status"] = "not_required"
+    existing_edges = {
+        (edge.get("from_step_id"), edge.get("to_step_id"), edge.get("kind"))
+        for edge in graph.get("dependencies", [])
+    }
+    semantic_edge_count = 0
+    for annotation in proposal["steps"]:
+        target_id = annotation["step_id"]
+        for source_id in annotation["depends_on"]:
+            source = by_id[source_id]
+            target = by_id[target_id]
+            source_role = source.get("semantic_role", "")
+            if source_role == "hypothesis":
+                kind, edge_status = "requires_assumption", "declared"
+            elif source_role == "definition":
+                kind, edge_status = "uses_definition", "declared"
+            elif source_role == "lemma":
+                kind, edge_status = "justifies", "declared"
+            else:
+                kind, edge_status = "derives", "not_checked"
+            key = (source_id, target_id, kind)
+            if key in existing_edges:
+                continue
+            edge_id = sha256(f"{graph.get('content_hash', '')}:{source_id}:{target_id}:{kind}:semantic".encode("utf-8")).hexdigest()[:16]
+            graph.setdefault("dependencies", []).append({
+                "id": f"edge_semantic_{edge_id}",
+                "from_step_id": source_id,
+                "to_step_id": target_id,
+                "kind": kind,
+                "edge_status": edge_status,
+                "reason": f"Source-bound semantic dependency: {annotation['rationale']}",
+                "semantic_proposal": True,
+            })
+            existing_edges.add(key)
+            semantic_edge_count += 1
     graph["semantic_proposal"] = {
         "status": "proposed",
         "model": config.llm_model,
         "fragments": proposal["fragments"],
+        "edge_count": semantic_edge_count,
         "notice": "LLM structure is a source-bound proposal; only rule validators or execution evidence may establish verification.",
     }
     graph.setdefault("limitations", []).append(

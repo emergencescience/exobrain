@@ -29,6 +29,7 @@ class SourceBlock:
     end_line: int
     section: str
     section_start_line: int
+    aligned_relation: bool = False
 
 
 def _stable_id(prefix: str, content_hash: str, start_line: int, text: str) -> str:
@@ -63,6 +64,73 @@ def _classify(block: SourceBlock) -> str:
     return "derivation_step"
 
 
+def _top_level_equality_parts(text: str) -> list[str]:
+    """Split LaTeX equality members without splitting brace-delimited syntax."""
+    depth = 0
+    start = 0
+    parts: list[str] = []
+    for index, character in enumerate(text):
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(depth - 1, 0)
+        elif character == "=" and depth == 0:
+            part = text[start:index].strip()
+            if not part:
+                return []
+            parts.append(part)
+            start = index + 1
+    final = text[start:].strip().rstrip(".:")
+    return [*parts, final] if parts and final else []
+
+
+def _aligned_relation_blocks(block: SourceBlock) -> list[SourceBlock]:
+    """Expand a display ``aligned`` calculation into adjacent proof relations.
+
+    The original display block remains the authoritative source span. Each
+    generated relation uses the physical row where its transformation appears;
+    no relation is invented and no LLM decision is required for this split.
+    """
+    if r"\begin{aligned}" not in block.text or r"\end{aligned}" not in block.text:
+        return [block]
+    before, remainder = block.text.split(r"\begin{aligned}", 1)
+    body, _after = remainder.split(r"\end{aligned}", 1)
+    chunks = re.split(r"\\\\", body)
+    relation_blocks: list[SourceBlock] = []
+    previous: str | None = None
+    offset = len(before) + len(r"\begin{aligned}")
+    for chunk in chunks:
+        chunk_start = offset
+        offset += len(chunk) + 2
+        raw = chunk.strip()
+        if not raw:
+            continue
+        leading_blank_lines = len(chunk) - len(chunk.lstrip("\n"))
+        source_start = block.start_line + block.text[:chunk_start].count("\n") + leading_blank_lines
+        source_end = source_start + max(0, raw.count("\n"))
+        cleaned = raw.replace("&", "").strip()
+        if previous is None:
+            members = _top_level_equality_parts(cleaned)
+        else:
+            tail = cleaned.lstrip("=").strip()
+            tail_parts = _top_level_equality_parts(tail)
+            members = [previous, *(tail_parts or [tail])]
+        if len(members) < 2:
+            continue
+        for left, right in zip(members, members[1:]):
+            relation = f"$$\n{left}={right}\n$$"
+            relation_blocks.append(SourceBlock(
+                text=relation,
+                start_line=source_start,
+                end_line=source_end,
+                section=block.section,
+                section_start_line=block.section_start_line,
+                aligned_relation=True,
+            ))
+        previous = members[-1]
+    return relation_blocks or [block]
+
+
 def _blocks(markdown: str) -> list[SourceBlock]:
     """Split Markdown into bounded semantic source blocks while retaining ranges."""
     lines = markdown.splitlines()
@@ -83,12 +151,17 @@ def _blocks(markdown: str) -> list[SourceBlock]:
             continue
         start = index
         if line.strip().startswith("$$"):
-            index += 1
-            while index < len(lines):
-                if lines[index].strip().startswith("$$"):
-                    index += 1
-                    break
+            # A complete display expression may open and close on the same line.
+            # Do not consume the following section while searching for a second delimiter.
+            if line.strip().count("$$") >= 2:
                 index += 1
+            else:
+                index += 1
+                while index < len(lines):
+                    if lines[index].strip().startswith("$$"):
+                        index += 1
+                        break
+                    index += 1
         else:
             index += 1
             while index < len(lines):
@@ -98,9 +171,9 @@ def _blocks(markdown: str) -> list[SourceBlock]:
                 index += 1
         text = "\n".join(lines[start:index]).strip()
         if text:
-            blocks.append(SourceBlock(text=text, start_line=start + 1, end_line=index, section=section, section_start_line=section_start))
+            block = SourceBlock(text=text, start_line=start + 1, end_line=index, section=section, section_start_line=section_start)
+            blocks.extend(_aligned_relation_blocks(block))
     return blocks
-
 
 def _result_status(block: SourceBlock, verification_results: list[dict[str, Any]]) -> str:
     overlapping = [
@@ -306,7 +379,18 @@ def build_proof_graph(markdown: str, verification_results: list[dict[str, Any]])
             "local_status": _result_status(block, verification_results),
             "fragment_id": fragment["id"],
             "is_formula": block.text.lstrip().startswith("$$"),
+            "aligned_relation": block.aligned_relation,
         }
+        if block.aligned_relation:
+            from app.verify import verify_equation
+            relation_result = verify_equation(block.text.strip().removeprefix("$$").removesuffix("$$").strip())
+            if relation_result.status == "verified":
+                step["local_status"] = "locally_verified"
+            elif relation_result.status in {"error", "failed"}:
+                step["local_status"] = "failed"
+            else:
+                step["local_status"] = "not_checked"
+
         fragment["steps"].append(step)
         ordered_steps.append(step)
 
@@ -338,6 +422,27 @@ def build_proof_graph(markdown: str, verification_results: list[dict[str, Any]])
         prior_step = step
 
     _add_explicit_derivation_edges(dependencies, ordered_steps, content_hash)
+    # An aligned relation is a real source-bound transformation. If its target
+    # relation was discharged deterministically, the incoming dependency—not an
+    # isolated formula node—is the verified object.
+    by_id = {step["id"]: step for step in ordered_steps}
+    for edge in dependencies:
+        target = by_id.get(edge.get("to_step_id", ""))
+        if not target or not target.get("aligned_relation"):
+            continue
+        if target["local_status"] == "locally_verified":
+            edge["edge_status"] = "verified"
+            edge["reason"] = "SymPy discharged this source-bound adjacent relation."
+            edge["validator"] = {
+                "id": "sympy-adjacent-relation-v1",
+                "label": "Adjacent aligned relation",
+                "status": "verified",
+                "method": "SymPy simplified the source-bound left and right expressions to equality.",
+                "evidence": {"target_step_id": target["id"], "engine": "SymPy"},
+            }
+        elif target["local_status"] == "failed":
+            edge["edge_status"] = "failed"
+            edge["reason"] = "The target adjacent relation failed deterministic checking."
     graph = {
         "schema_version": "proof-dependency-graph-v1",
         "content_hash": content_hash,

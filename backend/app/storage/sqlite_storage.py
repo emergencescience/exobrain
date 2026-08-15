@@ -12,6 +12,7 @@ from app.storage import (
     ClaimEvidenceLink,
     Document,
     ExecutionArtifact,
+    LLMCallLog,
     Snapshot,
     SnapshotShare,
 )
@@ -85,6 +86,23 @@ class SQLiteStorage:
                     ON execution_artifacts(document_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_claim_evidence_snapshot
                     ON claim_evidence_links(snapshot_id, claim_id);
+                CREATE TABLE IF NOT EXISTS llm_call_logs (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                    source_hash TEXT NOT NULL DEFAULT '',
+                    call_name TEXT NOT NULL,
+                    system_prompt_name TEXT NOT NULL,
+                    provider TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    request_payload TEXT NOT NULL DEFAULT '{}',
+                    response_text TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    http_status INTEGER,
+                    error_type TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_llm_call_logs_document
+                    ON llm_call_logs(document_id, created_at DESC);
             """)
             snapshot_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()
@@ -475,3 +493,40 @@ class SQLiteStorage:
             )
             for row in rows
         ]
+
+    async def save_llm_call_log(self, log: LLMCallLog) -> LLMCallLog:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute(
+                """
+                INSERT INTO llm_call_logs
+                    (id, document_id, source_hash, call_name, system_prompt_name, provider, model,
+                     request_payload, response_text, status, http_status, error_type, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    log.id, log.document_id or None, log.source_hash, log.call_name, log.system_prompt_name,
+                    log.provider, log.model, json.dumps(log.request_payload, ensure_ascii=False),
+                    log.response_text, log.status, log.http_status, log.error_type, log.created_at,
+                ),
+            )
+            conn.commit()
+            conn.close()
+        return log
+
+    async def list_llm_call_logs(self, document_id: str, limit: int = 50) -> list[LLMCallLog]:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            rows = conn.execute(
+                """SELECT id, document_id, source_hash, call_name, system_prompt_name, provider, model,
+                          request_payload, response_text, status, http_status, error_type, created_at
+                   FROM llm_call_logs WHERE document_id=? ORDER BY created_at DESC LIMIT ?""",
+                (document_id, min(max(limit, 1), 200)),
+            ).fetchall()
+            conn.close()
+        return [LLMCallLog(
+            id=row[0], document_id=row[1] or "", source_hash=row[2], call_name=row[3],
+            system_prompt_name=row[4], provider=row[5], model=row[6],
+            request_payload=json.loads(row[7] or "{}"), response_text=row[8], status=row[9],
+            http_status=row[10], error_type=row[11], created_at=row[12],
+        ) for row in rows]

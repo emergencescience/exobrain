@@ -153,7 +153,6 @@ type MobilePane = "project" | "document" | "assistant";
 const COPY = {
   en: {
     product: "Exobrain",
-    productKicker: "Symbol Science workspace",
     project: "Project",
     projects: "Projects",
     newDocument: "New document",
@@ -243,7 +242,6 @@ const COPY = {
   },
   zh: {
     product: "Exobrain",
-    productKicker: "Symbol Science 工作区",
     project: "项目",
     projects: "项目",
     newDocument: "新建文档",
@@ -786,7 +784,6 @@ export default function ExobrainClient({
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-600 text-sm font-semibold text-white">S</div>
           <div className="min-w-0 leading-tight">
             <p className="truncate text-sm font-semibold tracking-tight text-slate-950">{copy.product}</p>
-            <p className="hidden text-[10px] font-medium uppercase tracking-[0.14em] text-slate-400 sm:block">{copy.productKicker}</p>
           </div>
           {showWorkspace && (
             <>
@@ -1208,19 +1205,35 @@ function ReviewPanel({
   onFocusSource: (line: number) => void;
   onSelectSnapshot: (snapshot: VerificationSnapshot) => void;
 }) {
-  const [view, setView] = useState<"map" | "claims" | "graph" | "evidence">("map");
-  const claims = results.filter((result) => result.claim_type !== "definition");
-  const verified = claims.filter((result) => result.status === "verified").length;
-  const needsReview = claims.length - verified;
-  const evidenceByClaim = results.reduce<Record<string, EvidenceLink[]>>((accumulator, result) => {
-    accumulator[result.claim_id] = evidenceLinks.filter((item) => item.claim_id === result.claim_id);
-    return accumulator;
-  }, {});
+  const [view, setView] = useState<"map" | "edges" | "graph" | "evidence">("map");
+  const allSteps = proofGraph?.fragments.flatMap((fragment) => fragment.steps) || [];
+  const stepById = new Map(allSteps.map((step) => [step.id, step]));
+  const proofEdges = [...(proofGraph?.dependencies || [])
+    .filter((edge) => stepById.has(edge.from_step_id) && stepById.has(edge.to_step_id))
+    .reduce((selected, edge) => {
+      const key = `${edge.from_step_id}:${edge.to_step_id}`;
+      const priority = (candidate: ProofGraph["dependencies"][number]) => {
+        if (candidate.edge_status === "verified" || candidate.edge_status === "verified_under_assumptions") return 100;
+        return ({ justifies: 50, requires_assumption: 45, uses_definition: 40, formula_transform: 30, substitutes_result: 20, derives: 10 } as Record<string, number>)[candidate.kind] || 0;
+      };
+      const previous = selected.get(key);
+      if (!previous || priority(edge) > priority(previous)) selected.set(key, edge);
+      return selected;
+    }, new Map<string, ProofGraph["dependencies"][number]>())
+    .values()];
+  const verifiedEdges = proofEdges.filter((edge) => edge.edge_status === "verified" || edge.edge_status === "verified_under_assumptions").length;
+  const openEdges = proofEdges.length - verifiedEdges;
+  const edgeStatusMeta = (status: string) => {
+    if (status === "verified") return { label: copy.verified, className: "border-emerald-200 bg-emerald-50 text-emerald-800", dot: "bg-emerald-500" };
+    if (status === "verified_under_assumptions") return { label: lang === "zh" ? "在显式前提下成立" : "Verified under assumptions", className: "border-sky-200 bg-sky-50 text-sky-800", dot: "bg-sky-500" };
+    if (status === "failed") return { label: copy.failed, className: "border-rose-200 bg-rose-50 text-rose-800", dot: "bg-rose-500" };
+    if (status === "declared") return { label: lang === "zh" ? "已声明前提" : "Declared premise", className: "border-slate-200 bg-slate-50 text-slate-700", dot: "bg-slate-400" };
+    return { label: lang === "zh" ? "待验证边" : "Open proof obligation", className: "border-amber-200 bg-amber-50 text-amber-800", dot: "bg-amber-500" };
+  };
   const labels = lang === "zh"
-    ? { map: "证明地图", claims: "主张", graph: "图谱细节", evidence: "执行证据", history: "快照历史", scope: "验证范围", source: "在源码中查看", selected: "验证该主张", block: "验证选中区块", noEvidence: "这个快照中还没有关联的执行证据。", noGraph: "尚未提取可显示的证明依赖。", execution: "执行结果", parent: "上游主张", assumptions: "依赖假设", sourceLatex: "查看源码 LaTeX" }
-    : { map: "Proof map", claims: "Claims", graph: "Graph detail", evidence: "Execution evidence", history: "Snapshot history", scope: "Verification scope", source: "View source", selected: "Verify this claim", block: "Verify selected block", noEvidence: "No execution evidence is linked to this snapshot yet.", noGraph: "No proof dependencies were extracted for this snapshot.", execution: "Execution result", parent: "Upstream claim", assumptions: "Assumptions", sourceLatex: "View source LaTeX" };
-  const selectedClaim = claims.find((item) => item.claim_id === selectedClaimId) || null;
-
+    ? { map: "证明地图", edges: "推导关系", graph: "图谱细节", evidence: "执行证据", history: "快照历史", scope: "验证范围", source: "在源码中查看", block: "验证选中区块", noEvidence: "这个快照中还没有关联的执行证据。", noGraph: "尚未提取可显示的证明依赖。", execution: "执行结果", sourceLatex: "查看源码 LaTeX", edgeSummary: "边是验证对象；节点只提供上下文。", upstream: "前提/输入", downstream: "结论/输出", ruleEvidence: "确定性证据", openEdges: "待验证关系" }
+    : { map: "Proof map", edges: "Proof edges", graph: "Graph detail", evidence: "Execution evidence", history: "Snapshot history", scope: "Verification scope", source: "View source", block: "Verify selected block", noEvidence: "No execution evidence is linked to this snapshot yet.", noGraph: "No proof dependencies were extracted for this snapshot.", execution: "Execution result", sourceLatex: "View source LaTeX", edgeSummary: "Edges are the verification objects; nodes provide context only.", upstream: "Premise / input", downstream: "Conclusion / output", ruleEvidence: "Deterministic evidence", openEdges: "Open proof obligations" };
+  const selectedClaim = results.find((item) => item.claim_id === selectedClaimId) || null;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-[#fcfcfd] p-4 lg:p-5">
       <div className="mx-auto max-w-4xl">
@@ -1237,79 +1250,46 @@ function ReviewPanel({
             </div>
           </div>
           <div className="mt-4 grid gap-3 border-t border-slate-100 pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <label className="block text-[11px] font-medium text-slate-500">
-              {labels.history}
+            <label className="block text-[11px] font-medium text-slate-500">{labels.history}
               <select value={snapshot?.id || ""} onChange={(event) => { const next = snapshots.find((item) => item.id === event.target.value); if (next) onSelectSnapshot(next); }} disabled={loadingSnapshots || snapshots.length === 0} className="mt-1.5 block w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-700 outline-none focus:border-indigo-300">
                 {!snapshots.length && <option value="">{loadingSnapshots ? copy.loading : copy.noVerification}</option>}
-                {snapshots.map((item) => <option key={item.id} value={item.id}>{formatDate(item.created_at, lang)} · {scopeLabel(item.verification_scope, lang)} · {item.verification_results?.length || 0}</option>)}
+                {snapshots.map((item) => <option key={item.id} value={item.id}>{formatDate(item.created_at, lang)} · {scopeLabel(item.verification_scope, lang)} · {item.proof_graph?.dependencies?.length || 0} {lang === "zh" ? "边" : "edges"}</option>)}
               </select>
             </label>
-            <div className="text-[11px] font-medium text-slate-500">
-              {labels.scope}
-              <p className="mt-1.5 rounded-md border border-slate-100 bg-slate-50 px-2.5 py-2 text-xs font-normal text-slate-700">{scopeLabel(snapshot?.verification_scope, lang)}</p>
-            </div>
+            <div className="text-[11px] font-medium text-slate-500">{labels.scope}<p className="mt-1.5 rounded-md border border-slate-100 bg-slate-50 px-2.5 py-2 text-xs font-normal text-slate-700">{snapshot ? scopeLabel(snapshot.verification_scope, lang) : scopeLabel(undefined, lang)}</p></div>
           </div>
         </div>
-
-        {results.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-white p-7 text-center">
-            <p className="text-sm font-semibold text-slate-700">{copy.noVerification}</p>
-            <p className="mx-auto mt-2 max-w-lg text-xs leading-5 text-slate-500">{copy.noVerificationDescription}</p>
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+          <div className="grid grid-cols-4 gap-1" role="tablist" aria-label={copy.review}>
+            {([ ["map", labels.map], ["edges", labels.edges], ["graph", labels.graph], ["evidence", labels.evidence] ] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={view === id} onClick={() => setView(id)} className={`rounded-md px-3 py-2 text-xs font-semibold transition ${view === id ? "bg-indigo-50 text-indigo-700 shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"}`}>{label}</button>)}
           </div>
-        ) : (
-          <>
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <SummaryCard label={copy.claims} value={String(claims.length)} detail={copy.reviewSummary} />
-              <SummaryCard label={copy.verifiedCount} value={String(verified)} detail={`${Math.round((verified / Math.max(claims.length, 1)) * 100)}%`} tone="emerald" />
-              <SummaryCard label={copy.issueCount} value={String(needsReview)} detail={stale ? copy.stale : copy.current} tone={needsReview ? "amber" : "slate"} />
-              <SummaryCard label={labels.evidence} value={String(evidenceLinks.length)} detail={snapshot ? labels.execution : "—"} tone={evidenceLinks.length ? "emerald" : "slate"} />
-            </div>
-
-            <div className="mt-4 flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
-              {(["map", "claims", "graph", "evidence"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition ${view === item ? "bg-indigo-50 text-indigo-700" : "text-slate-500 hover:text-slate-800"}`}>{item === "map" ? labels.map : item === "claims" ? labels.claims : item === "graph" ? labels.graph : labels.evidence}</button>)}
-            </div>
-
-            {view === "claims" && <div className="mt-4 space-y-3">
-              {claims.map((result) => {
-                const meta = statusMeta(result.status, copy);
-                const selected = result.claim_id === selectedClaimId;
-                const linked = evidenceByClaim[result.claim_id] || [];
-                return <article key={result.claim_id} onClick={() => onSelectClaim(result.claim_id)} className={`cursor-pointer rounded-xl border bg-white p-4 shadow-sm transition ${selected ? "border-indigo-300 ring-2 ring-indigo-100" : "border-slate-200 hover:border-slate-300"}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-semibold ${meta.className}`}><span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}</span><span className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">{result.claim_type || copy.claim}</span>{linked.length > 0 && <span className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-700">{linked.length} {labels.evidence}</span>}</div>
-                      <PrettyFormula source={result.equation} />
-                      <details className="mt-2 text-[11px] text-slate-500"><summary className="cursor-pointer font-medium hover:text-indigo-700">{labels.sourceLatex}</summary><pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-2 text-[10px] leading-4 text-slate-100">{result.equation}</pre></details>
-                      <p className="mt-3 text-xs leading-5 text-slate-600">{result.detail}</p>
-                      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-400"><span>{copy.sourceRange} L{result.line}{result.end_line !== result.line ? `–${result.end_line}` : ""}</span>{result.assumption_claim_ids?.length ? <span>{result.assumption_claim_ids.length} {copy.assumptions}</span> : null}{result.parent_claim_id ? <span>{copy.provenance}</span> : null}</div>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap gap-2"><button onClick={(event) => { event.stopPropagation(); onVerifyClaim(result); }} disabled={verifying} className="rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">{labels.selected}</button><button onClick={(event) => { event.stopPropagation(); onFocusSource(result.line); }} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700">{labels.source}</button></div>
-                  </div>
+          {!snapshot ? <div className="p-8 text-center"><p className="text-sm font-semibold text-slate-700">{copy.noVerification}</p><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-slate-500">{copy.noVerificationDescription}</p></div> : <>
+            {view === "edges" && <div className="mt-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-900"><span>{labels.edgeSummary}</span><span className="font-semibold">{verifiedEdges} {copy.verified} · {openEdges} {labels.openEdges}</span></div>
+              {!proofEdges.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs leading-5 text-slate-500">{labels.noGraph}</div> : proofEdges.map((edge) => {
+                const source = stepById.get(edge.from_step_id)!;
+                const target = stepById.get(edge.to_step_id)!;
+                const meta = edgeStatusMeta(edge.edge_status);
+                const validator = edge.validator as { id?: string; label?: string; method?: string; evidence?: Record<string, unknown> } | undefined;
+                const focusLine = Math.min(source.source.start_line, target.source.start_line);
+                return <article key={edge.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold ${meta.className}`}><i className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}</span><span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{edge.kind.replaceAll("_", " ")}</span></div><button onClick={() => onFocusSource(focusLine)} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-indigo-700 transition hover:border-indigo-200 hover:bg-indigo-50">{labels.source} · L{source.source.start_line}–{target.source.end_line}</button></div>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-center"><div><p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{labels.upstream}</p><PrettyFormula source={source.text} compact /></div><div className="hidden text-center text-lg text-indigo-400 lg:block">→</div><div><p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{labels.downstream}</p><PrettyFormula source={target.text} compact /></div></div>
+                  <p className="mt-3 text-xs leading-5 text-slate-600">{edge.reason}</p>
+                  {validator && <details className="mt-3 rounded-lg border border-slate-100 bg-slate-50 p-3"><summary className="cursor-pointer text-xs font-semibold text-slate-700">{labels.ruleEvidence}{validator.label ? ` · ${validator.label}` : ""}</summary><p className="mt-2 text-xs leading-5 text-slate-600">{validator.method}</p>{validator.evidence && <pre className="mt-2 overflow-x-auto rounded bg-slate-950 p-2 text-[10px] leading-4 text-slate-100">{JSON.stringify(validator.evidence, null, 2)}</pre>}</details>}
                 </article>;
               })}
             </div>}
-
-            {view === "map" && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              {proofGraph?.fragments?.length ? <ProofMap graph={proofGraph} lang={lang} onFocusSource={onFocusSource} /> : <p className="text-xs leading-5 text-slate-500">{labels.noGraph}</p>}
-            </div>}
-            {view === "graph" && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              {proofGraph?.fragments?.length ? <ProofDependencyGraph graph={proofGraph} lang={lang} onFocusSource={onFocusSource} /> : <p className="text-xs leading-5 text-slate-500">{labels.noGraph}</p>}
-            </div>}
-            {view === "evidence" && <div className="mt-4 space-y-3">
-              {!evidenceLinks.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs leading-5 text-slate-500">{labels.noEvidence}</div> : evidenceLinks.map((evidence) => {
-                const claim = results.find((item) => item.claim_id === evidence.claim_id);
-                return <article key={evidence.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold text-slate-700">{labels.execution}</p><p className="mt-1 text-[10px] text-slate-500">{claim ? `${copy.claim} · L${claim.line}` : evidence.claim_id} · {formatDate(evidence.created_at, lang)}</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${evidence.exit_code === 0 ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>{evidence.exit_code === 0 ? copy.verified : copy.error}</span></div><p className="mt-3 break-all font-mono text-[10px] text-slate-400">SHA-256 {evidence.code_hash}</p>{evidence.stdout && <pre className="mt-3 max-h-44 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{evidence.stdout}</pre>}{evidence.stderr && <pre className="mt-3 max-h-44 overflow-auto rounded-lg bg-rose-50 p-3 text-xs text-rose-900">{evidence.stderr}</pre>}{claim && <button onClick={() => { onSelectClaim(claim.claim_id); onFocusSource(claim.line); }} className="mt-3 text-xs font-semibold text-indigo-600">{labels.source}</button>}</article>;
-              })}
-            </div>}
-          </>
-        )}
-
+            {view === "map" && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">{proofGraph?.fragments?.length ? <ProofMap graph={proofGraph} lang={lang} onFocusSource={onFocusSource} /> : <p className="text-xs leading-5 text-slate-500">{labels.noGraph}</p>}</div>}
+            {view === "graph" && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">{proofGraph?.fragments?.length ? <ProofDependencyGraph graph={proofGraph} lang={lang} onFocusSource={onFocusSource} /> : <p className="text-xs leading-5 text-slate-500">{labels.noGraph}</p>}</div>}
+            {view === "evidence" && <div className="mt-4 space-y-3">{!evidenceLinks.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs leading-5 text-slate-500">{labels.noEvidence}</div> : evidenceLinks.map((evidence) => { const claim = results.find((item) => item.claim_id === evidence.claim_id); return <article key={evidence.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold text-slate-700">{labels.execution}</p><p className="mt-1 text-[10px] text-slate-500">{claim ? `${copy.claim} · L${claim.line}` : evidence.claim_id} · {formatDate(evidence.created_at, lang)}</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${evidence.exit_code === 0 ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-800"}`}>{evidence.exit_code === 0 ? copy.verified : copy.error}</span></div><p className="mt-3 break-all font-mono text-[10px] text-slate-400">SHA-256 {evidence.code_hash}</p>{evidence.stdout && <pre className="mt-3 max-h-44 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{evidence.stdout}</pre>}{evidence.stderr && <pre className="mt-3 max-h-44 overflow-auto rounded-lg bg-rose-50 p-3 text-xs text-rose-900">{evidence.stderr}</pre>}{claim && <button onClick={() => { onSelectClaim(claim.claim_id); onFocusSource(claim.line); }} className="mt-3 text-xs font-semibold text-indigo-600">{labels.source}</button>}</article>; })}</div>}
+          </>}
+        </div>
         {selectedClaim && <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-xs text-indigo-800">{lang === "zh" ? "当前选中主张：" : "Selected claim: "}<span className="font-mono">{selectedClaim.claim_id}</span></div>}
       </div>
     </div>
   );
 }
-
 function ProofMap({ graph, lang, onFocusSource }: { graph: ProofGraph; lang: "en" | "zh"; onFocusSource: (line: number) => void }) {
   const labels = lang === "zh"
     ? { assumptions: "前提", claim: "命题", derivation: "推导", context: "上下文", verified: "已有确定性证据", review: "仍有证明义务", premise: "引用前提/引理", structure: "结构上下文", formulas: "公式步骤", source: "定位源码", edge: "关系边" }

@@ -20,6 +20,21 @@ def _get_sympy():
     return _sympy
 
 
+def normalize_latex_storage(latex: str) -> str:
+    """Return display-safe canonical LaTeX without Markdown math delimiters.
+
+    Delimiters belong to the surrounding Markdown source, not to a persisted
+    equation value. Keeping only the expression prevents a result from being
+    rendered as literal ``$$`` when it is displayed inside another math renderer.
+    """
+    normalized = latex.strip()
+    if normalized.startswith("$$") and normalized.endswith("$$") and len(normalized) >= 4:
+        normalized = normalized[2:-2].strip()
+    elif normalized.startswith("$") and normalized.endswith("$") and len(normalized) >= 2:
+        normalized = normalized[1:-1].strip()
+    return normalized
+
+
 @dataclass
 class VerificationResult:
     line: int          # 1-indexed line number
@@ -393,6 +408,9 @@ def verify_equation(latex: str) -> VerificationResult:
     aligned_terminal_result = _verify_aligned_terminal_relation(latex)
     if aligned_terminal_result is not None:
         return aligned_terminal_result
+    # Source Markdown remains immutable in the snapshot; the verifier works on
+    # an equivalent presentation-normalized expression.
+    latex = _strip_presentation_commands(latex)
     if _is_named_integral_definition(latex):
         return VerificationResult(
             line=0,

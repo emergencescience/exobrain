@@ -30,9 +30,16 @@ def test_aligned_calculation_is_one_source_claim_with_terminal_evidence():
     assert r"\begin{aligned}" in result.equation
 
 
-def test_aligned_calculation_maps_to_partially_checked_proof_step():
+def test_aligned_calculation_maps_to_source_bound_relation_edges():
     results = verify_document(ALIGNED_CIRCLE_CALCULATION)
     graph = build_proof_graph(ALIGNED_CIRCLE_CALCULATION, [result.__dict__ for result in results])
-    step = graph["fragments"][0]["steps"][0]
+    steps = [step for fragment in graph["fragments"] for step in fragment["steps"]]
+    relation_ids = {step["id"] for step in steps if step.get("aligned_relation")}
+    relation_edges = [
+        edge for edge in graph["dependencies"]
+        if edge["from_step_id"] in relation_ids and edge["to_step_id"] in relation_ids
+    ]
 
-    assert step["local_status"] == "partially_checked"
+    assert relation_ids
+    assert any(edge["edge_status"] == "verified" for edge in relation_edges)
+    assert any(edge["edge_status"] == "not_checked" for edge in relation_edges)
