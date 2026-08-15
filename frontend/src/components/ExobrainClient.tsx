@@ -73,9 +73,13 @@ interface ProofStep {
   kind: "assumption" | "definition" | "statement" | "derivation_step" | "theorem_application" | "conclusion";
   text: string;
   source: { start_line: number; end_line: number };
-  local_status: "locally_verified" | "partially_checked" | "inconclusive" | "failed" | "not_checked";
+  local_status: "locally_verified" | "partially_checked" | "inconclusive" | "failed" | "not_checked" | "not_required";
   fragment_id: string;
   is_formula?: boolean;
+  semantic_role?: "definition" | "hypothesis" | "lemma" | "deduction" | "conclusion";
+  verification_target?: "none" | "sympy" | "rule";
+  semantic_rule_id?: string;
+  semantic_rationale?: string;
 }
 interface ProofDependency {
   id: string;
@@ -675,7 +679,7 @@ export default function ExobrainClient({
       const response = await fetch(`${apiBaseUrl}/api/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ document_id: currentDocId || undefined, markdown, locale: lang, scope }),
+        body: JSON.stringify({ document_id: currentDocId || undefined, markdown, locale: lang, scope, semantic_parse: true }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
@@ -783,6 +787,9 @@ export default function ExobrainClient({
               {saveState === "saved" ? copy.saved : saveState === "saving" ? copy.saving : copy.unsaved}
             </span>
           )}
+          <a href="/dashboard" className="hidden rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 sm:block">
+            {lang === "zh" ? "验证仪表板" : "Verification dashboard"}
+          </a>
           <button onClick={exportMarkdown} disabled={!showWorkspace} className="hidden rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40 sm:block">
             {copy.download}
           </button>
@@ -1279,8 +1286,8 @@ function ReviewPanel({
 
 function ProofMap({ graph, lang, onFocusSource }: { graph: ProofGraph; lang: "en" | "zh"; onFocusSource: (line: number) => void }) {
   const labels = lang === "zh"
-    ? { assumptions: "前提", claim: "命题", derivation: "推导", context: "上下文", verified: "已有确定性证据", review: "仍有证明义务", structure: "结构上下文", formulas: "公式步骤", source: "定位源码", edge: "关系边" }
-    : { assumptions: "Assumptions", claim: "Claim", derivation: "Derivation", context: "Context", verified: "Deterministic evidence present", review: "Proof obligations remain", structure: "Structural context", formulas: "Formula steps", source: "View source", edge: "Dependency" };
+    ? { assumptions: "前提", claim: "命题", derivation: "推导", context: "上下文", verified: "已有确定性证据", review: "仍有证明义务", premise: "引用前提/引理", structure: "结构上下文", formulas: "公式步骤", source: "定位源码", edge: "关系边" }
+    : { assumptions: "Assumptions", claim: "Claim", derivation: "Derivation", context: "Context", verified: "Deterministic evidence present", review: "Proof obligations remain", premise: "Cited premise or lemma", structure: "Structural context", formulas: "Formula steps", source: "View source", edge: "Dependency" };
   const fragmentLabel: Record<ProofFragment["kind"], string> = { assumptions: labels.assumptions, claim: labels.claim, derivation: labels.derivation, context: labels.context };
   const stepById = new Map(graph.fragments.flatMap((fragment) => fragment.steps).map((step) => [step.id, step]));
   return <div className="mx-auto max-w-3xl">
@@ -1292,10 +1299,11 @@ function ProofMap({ graph, lang, onFocusSource }: { graph: ProofGraph; lang: "en
         const incidentEdges = graph.dependencies.filter((edge) => fragment.steps.some((step) => step.id === edge.from_step_id || step.id === edge.to_step_id));
         const hasVerifiedEdge = incidentEdges.some((edge) => edge.edge_status === "verified" || edge.edge_status === "verified_under_assumptions");
         const hasOpenFormula = formulaSteps.some((step) => step.local_status === "inconclusive" || step.local_status === "partially_checked" || step.local_status === "not_checked");
-        const status = formulaSteps.length === 0 ? "structure" : hasVerifiedEdge && !hasOpenFormula ? "verified" : "review";
-        const tone = status === "verified" ? "border-emerald-200 bg-emerald-50/70" : status === "review" ? "border-amber-200 bg-amber-50/60" : "border-slate-200 bg-white";
-        const statusText = status === "verified" ? labels.verified : status === "review" ? labels.review : labels.structure;
-        const statusTextTone = status === "verified" ? "text-emerald-800" : status === "review" ? "text-amber-800" : "text-slate-600";
+        const allFormulaPremises = formulaSteps.length > 0 && formulaSteps.every((step) => step.local_status === "not_required");
+        const status = formulaSteps.length === 0 ? "structure" : allFormulaPremises ? "premise" : hasVerifiedEdge && !hasOpenFormula ? "verified" : "review";
+        const tone = status === "verified" ? "border-emerald-200 bg-emerald-50/70" : status === "review" ? "border-amber-200 bg-amber-50/60" : status === "premise" ? "border-violet-200 bg-violet-50/70" : "border-slate-200 bg-white";
+        const statusText = status === "verified" ? labels.verified : status === "review" ? labels.review : status === "premise" ? labels.premise : labels.structure;
+        const statusTextTone = status === "verified" ? "text-emerald-800" : status === "review" ? "text-amber-800" : status === "premise" ? "text-violet-800" : "text-slate-600";
         return <div key={fragment.id} className="relative">
           {index > 0 && <div aria-hidden className="mx-auto h-6 w-px bg-slate-300"><span className="relative -left-1.5 top-4 block h-0 w-0 border-x-[3px] border-t-[5px] border-x-transparent border-t-slate-300" /></div>}
           <section className={`rounded-xl border p-4 shadow-sm ${tone}`}>
@@ -1332,6 +1340,7 @@ function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGrap
     inconclusive: "bg-amber-50 text-amber-800",
     failed: "bg-rose-50 text-rose-800",
     not_checked: "bg-slate-100 text-slate-600",
+    not_required: "bg-violet-50 text-violet-800",
   };
   const statusLabel: Record<ProofStep["local_status"], string> = {
     locally_verified: lang === "zh" ? "局部已验证" : "Locally verified",
@@ -1339,6 +1348,7 @@ function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGrap
     inconclusive: lang === "zh" ? "不确定" : "Inconclusive",
     failed: lang === "zh" ? "失败" : "Failed",
     not_checked: lang === "zh" ? "未检查" : "Not checked",
+    not_required: lang === "zh" ? "前提/引理" : "Cited premise",
   };
 
   return <div>

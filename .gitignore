@@ -11,6 +11,7 @@ backend/app/data/*.json
 backend/app/data/*.db
 .env
 logs
+cache
 
 # Reproducible frontend build and test outputs
 .next/

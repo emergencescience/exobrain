@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.config import config
 from app.proof_fragments import build_proof_graph
+from app.semantic_proof import apply_semantic_proposal, propose_semantic_structure
 from app.storage import StorageProtocol, get_storage
 from app.verify import verify_document
 
@@ -28,6 +29,7 @@ class VerifyRequest(BaseModel):
     locale: str = "en"
     document_id: str | None = None
     scope: VerificationScope | None = None
+    semantic_parse: bool = False
 
 
 class VerifyResult(BaseModel):
@@ -205,6 +207,14 @@ async def verify(
 
     scope_metadata = _scope_metadata(req.scope)
     proof_graph = build_proof_graph(req.markdown, [result.model_dump() for result in results])
+    if req.semantic_parse:
+        proposal = await propose_semantic_structure(proof_graph, req.locale)
+        if proposal is not None:
+            proof_graph = apply_semantic_proposal(proof_graph, proposal)
+        else:
+            proof_graph.setdefault("limitations", []).append(
+                "Semantic proof parsing was requested but no source-bound LLM proposal was available; heuristic structure is shown instead."
+            )
     snapshot = None
     if document is not None:
         snapshot = await storage.save_snapshot(

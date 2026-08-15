@@ -60,6 +60,21 @@ def _radial_integral_validator(text: str) -> dict[str, Any] | None:
     )
 
 
+def _exponential_at_zero_validator(text: str) -> dict[str, Any] | None:
+    compact = _compact(text)
+    if not ("f^{(k)}(0)=e^0=1" in compact or "f^(k)(0)=e^0=1" in compact):
+        return None
+    if sp.simplify(sp.exp(0) - 1) != 0:
+        return None
+    return _validator(
+        "exponential-at-zero-v1",
+        "Exponential evaluation at zero",
+        "verified_under_assumptions",
+        "SymPy confirms exp(0)=1; the evaluation uses the cited premise f^(k)(x)=exp(x).",
+        {"calculation": "exp(0) = 1", "premise": "f^(k)(x) = exp(x)", "engine": "SymPy"},
+    )
+
+
 def _angular_integral_validator(text: str) -> dict[str, Any] | None:
     compact = _compact(text)
     has_bounds = "\\int_0^{\\pi/2}" in compact or "\\int_0^\\pi/2" in compact
@@ -101,12 +116,20 @@ def _step_states_i_positive(step: dict[str, Any]) -> bool:
 
 
 def _apply_target_rule(edge: dict[str, Any], target: dict[str, Any]) -> None:
-    validator = _radial_integral_validator(target["text"]) or _angular_integral_validator(target["text"])
+    validator = (
+        _radial_integral_validator(target["text"])
+        or _angular_integral_validator(target["text"])
+        or _exponential_at_zero_validator(target["text"])
+    )
     if validator is None:
         return
-    edge["edge_status"] = "verified"
-    edge["reason"] = "A bounded deterministic integral rule discharged this local derivation edge."
+    edge["edge_status"] = validator["status"]
+    edge["reason"] = "A bounded deterministic rule discharged this local derivation edge."
     edge["validator"] = validator
+    if validator["status"] == "verified":
+        target["local_status"] = "locally_verified"
+    elif target.get("local_status") != "failed":
+        target["local_status"] = "partially_checked"
 
 
 def apply_rule_specific_validators(graph: dict[str, Any]) -> dict[str, Any]:
