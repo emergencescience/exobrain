@@ -44,6 +44,8 @@ class VerifyResult(BaseModel):
     edge_type: str | None = None
     assumption_claim_ids: list[str] = []
     crosses_paragraph: bool = False
+    deterministic_status: str | None = None
+    semantic_status: str | None = None
 
 
 def get_user_id(x_user_id: str | None = Header(default=None)) -> str:
@@ -109,6 +111,33 @@ def _scope_metadata(scope: VerificationScope | None) -> dict:
         "end_line": scope.end_line,
         "claim_id": scope.claim_id,
     }
+
+
+def _apply_semantic_review_statuses(results: list[VerifyResult], proof_graph: dict) -> None:
+    """Expose source-bound LLM structural review without overwriting deterministic evidence."""
+    semantic_steps = [
+        step
+        for fragment in proof_graph.get("fragments", [])
+        for step in fragment.get("steps", [])
+        if step.get("verification_target") == "semantic"
+    ]
+    for result in results:
+        matching_steps = [
+            step for step in semantic_steps
+            if step.get("is_formula")
+            and step.get("source", {}).get("start_line", 0) <= result.end_line
+            and step.get("source", {}).get("end_line", 0) >= result.line
+        ]
+        if not matching_steps or result.status not in {"inconclusive", "partially_checked", "not_checked"}:
+            continue
+        rationale = next((step.get("semantic_rationale", "") for step in matching_steps if step.get("semantic_rationale")), "Source-bound structural review completed.")
+        result.deterministic_status = result.status
+        result.semantic_status = "structurally_reviewed"
+        result.status = "semantically_reviewed"
+        result.detail = f"LLM structural review: {rationale} Deterministic result retained: {result.deterministic_status}. {result.detail}"
+        for step in matching_steps:
+            if step.get("local_status") in {"inconclusive", "not_checked", "partially_checked"}:
+                step["local_status"] = "semantically_reviewed"
 
 
 @router.post("/verify")
@@ -247,6 +276,7 @@ async def verify(
         if proposal is not None:
             logger.info("verification.semantic_parse.apply.start document_id=%s", req.document_id or "ad-hoc")
             proof_graph = apply_semantic_proposal(proof_graph, proposal)
+            _apply_semantic_review_statuses(results, proof_graph)
             logger.info("verification.semantic_parse.apply.finish document_id=%s", req.document_id or "ad-hoc")
         else:
             proof_graph["semantic_proposal"] = {

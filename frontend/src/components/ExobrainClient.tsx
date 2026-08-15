@@ -47,6 +47,7 @@ type VerificationStatus =
   | "inconclusive"
   | "insufficient_information"
   | "reasoned"
+  | "semantically_reviewed"
   | "error";
 
 interface VerifyResult {
@@ -75,7 +76,7 @@ interface ProofStep {
   kind: "assumption" | "definition" | "statement" | "derivation_step" | "theorem_application" | "conclusion";
   text: string;
   source: { start_line: number; end_line: number };
-  local_status: "locally_verified" | "partially_checked" | "inconclusive" | "failed" | "not_checked" | "not_required";
+  local_status: "locally_verified" | "partially_checked" | "semantically_reviewed" | "inconclusive" | "failed" | "not_checked" | "not_required";
   fragment_id: string;
   is_formula?: boolean;
   semantic_role?: "definition" | "hypothesis" | "lemma" | "deduction" | "conclusion";
@@ -365,6 +366,7 @@ function statusMeta(status: VerificationStatus, copy: Copy) {
     inconclusive: { label: copy.inconclusive, className: `${shared} border-amber-200 bg-amber-50 text-amber-800`, dot: "bg-amber-500" },
     insufficient_information: { label: copy.insufficient_information, className: `${shared} border-slate-200 bg-slate-50 text-slate-700`, dot: "bg-slate-400" },
     reasoned: { label: copy.reasoned, className: `${shared} border-sky-200 bg-sky-50 text-sky-800`, dot: "bg-sky-500" },
+    semantically_reviewed: { label: copy.reasoned, className: `${shared} border-sky-200 bg-sky-50 text-sky-800`, dot: "bg-sky-500" },
     error: { label: copy.error, className: `${shared} border-rose-200 bg-rose-50 text-rose-800`, dot: "bg-rose-500" },
   };
   return values[status] || values.error;
@@ -1264,7 +1266,7 @@ function ReviewPanel({
         </div>
         <div className="mt-4 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
           <div className="grid grid-cols-4 gap-1" role="tablist" aria-label={copy.review}>
-            {([ ["map", labels.map], ["edges", labels.edges], ["graph", labels.graph], ["evidence", labels.evidence] ] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={view === id} onClick={() => setView(id)} className={`rounded-md px-3 py-2 text-xs font-semibold transition ${view === id ? "bg-indigo-50 text-indigo-700 shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"}`}>{label}</button>)}
+            {([["map", labels.map], ["edges", labels.edges], ["graph", labels.graph], ["evidence", labels.evidence]] as const).map(([id, label]) => <button key={id} role="tab" aria-selected={view === id} onClick={() => setView(id)} className={`rounded-md px-3 py-2 text-xs font-semibold transition ${view === id ? "bg-indigo-50 text-indigo-700 shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"}`}>{label}</button>)}
           </div>
           {!snapshot ? <div className="p-8 text-center"><p className="text-sm font-semibold text-slate-700">{copy.noVerification}</p><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-slate-500">{copy.noVerificationDescription}</p></div> : <>
             {view === "edges" && <div className="mt-4 space-y-3">
@@ -1346,6 +1348,7 @@ function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGrap
   const statusTone: Record<ProofStep["local_status"], string> = {
     locally_verified: "bg-emerald-50 text-emerald-800",
     partially_checked: "bg-sky-50 text-sky-800",
+    semantically_reviewed: "bg-sky-50 text-sky-800",
     inconclusive: "bg-amber-50 text-amber-800",
     failed: "bg-rose-50 text-rose-800",
     not_checked: "bg-slate-100 text-slate-600",
@@ -1354,6 +1357,7 @@ function ProofDependencyGraph({ graph, lang, onFocusSource }: { graph: ProofGrap
   const statusLabel: Record<ProofStep["local_status"], string> = {
     locally_verified: lang === "zh" ? "局部已验证" : "Locally verified",
     partially_checked: lang === "zh" ? "部分已检查" : "Partially checked",
+    semantically_reviewed: lang === "zh" ? "结构审阅通过" : "Structurally reviewed",
     inconclusive: lang === "zh" ? "不确定" : "Inconclusive",
     failed: lang === "zh" ? "失败" : "Failed",
     not_checked: lang === "zh" ? "未检查" : "Not checked",

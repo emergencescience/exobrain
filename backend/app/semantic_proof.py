@@ -16,17 +16,12 @@ from typing import Any
 import httpx
 
 from app.config import config
+from app.prompt_loader import SEMANTIC_PROOF_SYSTEM_PROMPT_FILE, load_system_prompt
 
 logger = logging.getLogger("exobrain.semantic_proof")
 
-SEMANTIC_PROOF_SYSTEM_PROMPT_NAME = "semantic-proof-structure-v1"
-SEMANTIC_PROOF_SYSTEM_PROMPT = """You classify local mathematical proof source blocks for a reader-facing proof dependency graph. Return a source-bound structural proposal, never proof evidence. Preserve supplied IDs and never invent a step.
-
-Choose coarse, human-readable units. A contiguous display `aligned` derivation is one calculation unit, not one unit per equality sign. Combine prose immediately explaining a calculation with that calculation in the same fragment. Do not create a dependency merely because two blocks are adjacent in source order. `depends_on` must name an explicit mathematical premise, definition, theorem, substitution, or prior result actually used by the target.
-
-Use `context`, `definition`, `hypothesis`, or `lemma` with verification_target=none for facts a reader need not re-prove here. Use `calculation` with verification_target=semantic only for a short, standard derivation whose structural correctness you can assess from the supplied source; this means semantic review, NOT deterministic proof. Use sympy only for closed symbolic relations that are appropriate for deterministic evaluation. Use rule only for a named bounded rewrite or theorem-specific validator. A theorem citation is a lemma, not a verified deduction. A substitution must identify any missing functional or domain premise in its rationale. Do not claim anything verified. Return exactly one JSON object matching this shape and never wrap it in Markdown fences or prose:
-{"fragments":[{"title":"short unit title","role":"calculation","step_ids":["an exact supplied step id"]}],"steps":[{"step_id":"the same exact supplied step id","role":"calculation","verification_target":"semantic","rule_id":"","depends_on":["other exact supplied step ids only"],"rationale":"short reason"}]}. Do not use fragment IDs as dependencies and do not omit the steps array."""
-
+SEMANTIC_PROOF_SYSTEM_PROMPT_NAME = SEMANTIC_PROOF_SYSTEM_PROMPT_FILE
+SEMANTIC_PROOF_SYSTEM_PROMPT = load_system_prompt(SEMANTIC_PROOF_SYSTEM_PROMPT_NAME)
 
 def _audit_metadata(
     *,

@@ -118,3 +118,54 @@ def test_semantic_proposal_is_persisted_in_document_snapshot(monkeypatch, client
         for fragment in graph["fragments"]
         for step in fragment["steps"]
     )
+
+
+def test_semantic_review_promotes_only_unresolved_result_and_preserves_deterministic_status(monkeypatch, client):
+    import app.routes.verify as verify_route
+
+    async def semantic_parser(graph, _locale):
+        formula_step = next(
+            step for fragment in graph["fragments"] for step in fragment["steps"] if step.get("is_formula")
+        )
+        return {
+            "fragments": [{"title": "Standard relation", "role": "calculation", "step_ids": [formula_step["id"]]}],
+            "steps": [{"step_id": formula_step["id"], "role": "calculation", "verification_target": "semantic", "rule_id": "", "depends_on": [], "rationale": "A standard source-bound relation."}],
+        }, {"status": "proposed", "reason": "", "notice": "test"}
+
+    monkeypatch.setattr(verify_route, "propose_semantic_structure", semantic_parser)
+    headers = {"X-User-Id": "researcher-semantic-status"}
+    created = client.post("/api/documents", headers=headers, json={"title": "Semantic result status"})
+    document_id = created.json()["document"]["id"]
+    response = client.post("/api/verify", headers=headers, json={
+        "document_id": document_id,
+        "markdown": "# Relation\n\n$$\nx=y\n$$\n",
+        "semantic_parse": True,
+    })
+
+    assert response.status_code == 200
+    result = response.json()["snapshot"]["verification_results"][0]
+    assert result["status"] == "semantically_reviewed"
+    assert result["deterministic_status"] == "inconclusive"
+    assert result["semantic_status"] == "structurally_reviewed"
+
+
+def test_semantic_review_never_overwrites_deterministically_verified_result(monkeypatch, client):
+    import app.routes.verify as verify_route
+
+    async def semantic_parser(graph, _locale):
+        formula_step = next(
+            step for fragment in graph["fragments"] for step in fragment["steps"] if step.get("is_formula")
+        )
+        return {
+            "fragments": [{"title": "Identity", "role": "calculation", "step_ids": [formula_step["id"]]}],
+            "steps": [{"step_id": formula_step["id"], "role": "calculation", "verification_target": "semantic", "rule_id": "", "depends_on": [], "rationale": "Identity."}],
+        }, {"status": "proposed", "reason": "", "notice": "test"}
+
+    monkeypatch.setattr(verify_route, "propose_semantic_structure", semantic_parser)
+    response = client.post("/api/verify", json={"markdown": "$$\nx=x\n$$\n", "semantic_parse": True})
+
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["status"] == "verified"
+    assert result["deterministic_status"] is None
+    assert result["semantic_status"] is None
