@@ -379,3 +379,38 @@ def test_semantic_parser_audits_non_json_provider_body(monkeypatch):
     assert audit["http_status"] == 200
     assert audit["error_type"] == "JSONDecodeError"
     assert audit["response_text"] == "upstream gateway returned HTML"
+
+
+def test_semantic_parser_marks_length_limited_provider_output_as_truncated(monkeypatch):
+    import asyncio
+    import httpx
+    import app.semantic_proof as semantic_proof
+
+    class TruncatedClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, *_args, **_kwargs):
+            request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
+            return httpx.Response(
+                200,
+                request=request,
+                json={"choices": [{"finish_reason": "length", "message": {"content": "{\"steps\":["}}]},
+            )
+
+    monkeypatch.setattr(semantic_proof.config, "llm_api_key", "configured")
+    monkeypatch.setattr(semantic_proof.config, "llm_base_url", "https://provider.test")
+    monkeypatch.setattr(semantic_proof.httpx, "AsyncClient", lambda timeout: TruncatedClient())
+
+    proposal, status = asyncio.run(semantic_proof.propose_semantic_structure(_graph(), "en"))
+
+    assert proposal is None
+    assert status["reason"] == "provider_output_truncated"
+    audit = status["_llm_call_log"]
+    assert audit["status"] == "truncated"
+    assert audit["error_type"] == "OutputTruncated"
+    assert audit["http_status"] == 200
+    assert '"finish_reason":"length"' in audit["response_text"]

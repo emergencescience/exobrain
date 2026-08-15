@@ -353,13 +353,36 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
                     json=fallback_payload,
                 )
             response.raise_for_status()
-            raw_content = response.json()["choices"][0]["message"]["content"]
+            response_data = response.json()
+            choice = response_data["choices"][0]
+            raw_content = choice["message"]["content"]
+            finish_reason = choice.get("finish_reason")
             logger.info(
-                "semantic_parse.response_received provider=%s model=%s content_chars=%d",
+                "semantic_parse.response_received provider=%s model=%s content_chars=%d finish_reason=%s",
                 config.llm_provider_host,
                 config.llm_model,
                 len(raw_content) if isinstance(raw_content, str) else 0,
+                finish_reason,
             )
+            if finish_reason == "length":
+                logger.warning(
+                    "semantic_parse.unavailable reason=provider_output_truncated provider=%s model=%s",
+                    config.llm_provider_host,
+                    config.llm_model,
+                )
+                return None, {
+                    "status": "unavailable",
+                    "reason": "provider_output_truncated",
+                    "notice": "The semantic-parser response reached its output limit; heuristic structure is shown instead.",
+                    "_llm_call_log": _audit_metadata(
+                        payload=payload,
+                        locale=locale,
+                        status="truncated",
+                        response_text=response.text[:20000],
+                        http_status=response.status_code,
+                        error_type="OutputTruncated",
+                    ),
+                }
             if not isinstance(raw_content, str):
                 raise ValueError("provider response did not contain text content")
             parsed_content = json.loads(raw_content.removeprefix("```json").removeprefix("```").removesuffix("```").strip())
