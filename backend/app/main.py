@@ -20,6 +20,12 @@ from app.routes.shares import router as shares_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("exobrain")
+logger.info(
+    "llm_config provider=%s model=%s api_key_configured=%s",
+    config.llm_provider_host,
+    config.llm_model,
+    bool(config.llm_api_key),
+)
 
 app = FastAPI(
     title="Exobrain",

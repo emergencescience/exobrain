@@ -2,10 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
+import RenderedMath from "@/components/RenderedMath";
 
 type LocalStatus = "locally_verified" | "partially_checked" | "inconclusive" | "failed" | "not_checked" | "not_required";
 type Fragment = {
@@ -52,7 +49,7 @@ const localTone: Record<LocalStatus, string> = {
 };
 
 function Formula({ source }: { source: string }) {
-  return <div className="verification-formula pointer-events-none overflow-x-auto rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-800"><ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{source}</ReactMarkdown></div>;
+  return <RenderedMath source={source} className="verification-formula pointer-events-none" />;
 }
 
 export default function VerificationDashboardPage() {

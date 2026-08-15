@@ -12,6 +12,7 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import RenderedMath from "@/components/RenderedMath";
 
 interface Message {
   role: "user" | "assistant";
@@ -755,15 +756,19 @@ export default function ExobrainClient({
     }
   };
 
-  const exportMarkdown = () => {
-    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const downloadProject = useCallback((project: DocumentRecord) => {
+    const isCurrentDocument = project.id === currentDocId;
+    const content = isCurrentDocument ? markdown : project.markdown;
+    const title = isCurrentDocument ? (documentTitle || copy.documentTitle) : (project.title || copy.documentTitle);
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${(documentTitle || copy.documentTitle).replace(/[^a-z0-9-_]+/gi, "-").toLowerCase()}.md`;
+    link.download = `${title.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase()}.md`;
     link.click();
     URL.revokeObjectURL(url);
-  };
+    setProjectMenuId(null);
+  }, [copy.documentTitle, currentDocId, documentTitle, markdown]);
 
 
   const currentProject = projects.find((project) => project.id === currentDocId) || null;
@@ -796,9 +801,6 @@ export default function ExobrainClient({
           <a href="/dashboard" className="hidden rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 sm:block">
             {lang === "zh" ? "验证仪表板" : "Verification dashboard"}
           </a>
-          <button onClick={exportMarkdown} disabled={!showWorkspace} className="hidden rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40 sm:block">
-            {copy.download}
-          </button>
           <button onClick={() => void createProject()} className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-500">
             {copy.newDocument}
           </button>
@@ -846,8 +848,8 @@ export default function ExobrainClient({
                   const renaming = project.id === renamingProjectId;
                   const menuOpen = project.id === projectMenuId;
                   const menuLabels = lang === "zh"
-                    ? { actions: "文档操作", rename: "重命名", duplicate: "创建副本", delete: "删除" }
-                    : { actions: "Document actions", rename: "Rename", duplicate: "Duplicate", delete: "Delete" };
+                    ? { actions: "文档操作", download: "下载 Markdown", rename: "重命名", duplicate: "创建副本", delete: "删除" }
+                    : { actions: "Document actions", download: "Download Markdown", rename: "Rename", duplicate: "Duplicate", delete: "Delete" };
                   return (
                     <div key={project.id} onContextMenu={(event) => { event.preventDefault(); setProjectMenuId(menuOpen ? null : project.id); }} onKeyDown={(event) => { if (active && event.key === "F2") { event.preventDefault(); startRenameProject(project); } }} className={`group relative flex items-center gap-2 rounded-md border px-2 py-2 transition ${active ? "border-indigo-200 bg-indigo-50" : "border-transparent hover:bg-slate-100"}`}>
                       {renaming ? (
@@ -859,7 +861,8 @@ export default function ExobrainClient({
                         </button>
                       )}
                       {!renaming && <button type="button" onClick={(event) => { event.stopPropagation(); setProjectMenuId(menuOpen ? null : project.id); }} aria-label={menuLabels.actions} aria-haspopup="menu" aria-expanded={menuOpen} className="rounded p-1 text-slate-400 transition hover:bg-white hover:text-indigo-700 group-hover:block focus:block">•••</button>}
-                      {menuOpen && <div role="menu" className="absolute right-1 top-9 z-30 w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-lg ring-1 ring-slate-950/5">
+                      {menuOpen && <div role="menu" className="absolute right-1 top-9 z-30 w-40 rounded-lg border border-slate-200 bg-white p-1 shadow-lg ring-1 ring-slate-950/5">
+                        <button role="menuitem" onClick={() => downloadProject(project)} className="block w-full rounded px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">{menuLabels.download}</button>
                         <button role="menuitem" onClick={() => startRenameProject(project)} className="block w-full rounded px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">{menuLabels.rename}</button>
                         <button role="menuitem" onClick={() => void duplicateProject(project)} className="block w-full rounded px-2 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">{menuLabels.duplicate}</button>
                         <button role="menuitem" onClick={() => { setProjectMenuId(null); void deleteProject(project); }} className="block w-full rounded px-2 py-1.5 text-left text-xs text-rose-700 hover:bg-rose-50">{menuLabels.delete}</button>
@@ -1141,13 +1144,7 @@ function LabelDocument({
   );
 }
 
-function PrettyFormula({ source, compact = false }: { source: string; compact?: boolean }) {
-  return (
-    <div className={`exobrain-prose overflow-x-auto rounded-lg border border-slate-100 bg-slate-50/80 px-3 py-2 text-slate-800 ${compact ? "text-xs" : "text-sm"}`}>
-      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{source}</ReactMarkdown>
-    </div>
-  );
-}
+const PrettyFormula = RenderedMath;
 
 function ReviewPanel({
   copy,

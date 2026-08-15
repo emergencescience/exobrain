@@ -291,14 +291,14 @@ async def chat(request: Request):
     if not config.llm_api_key:
         raise HTTPException(
             status_code=503,
-            detail="LLM not configured. Set EXOBRAIN_LLM_API_KEY environment variable.",
+            detail="LLM not configured. Set OPENAI_API_KEY, OPENAI_API_BASE, and OPENAI_MODEL on the server.",
         )
 
     t0 = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
-                f"{config.llm_base_url}/v1/chat/completions",
+                config.llm_chat_completions_url,
                 json={
                     "model": model,
                     "messages": llm_messages,

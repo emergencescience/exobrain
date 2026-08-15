@@ -124,15 +124,24 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
     never includes provider response bodies or credentials.
     """
     if not config.llm_api_key:
+        logger.warning("semantic_parse.unavailable reason=llm_not_configured")
         return None, {"status": "unavailable", "reason": "llm_not_configured", "notice": "Semantic parsing needs a configured server-side LLM provider."}
     payload = _source_payload(graph)
     if not payload:
+        logger.info("semantic_parse.unavailable reason=no_source_steps")
         return None, {"status": "unavailable", "reason": "no_source_steps", "notice": "The selected source contains no proof steps to classify."}
+    logger.info(
+        "semantic_parse.request provider=%s model=%s source_steps=%d locale=%s",
+        config.llm_provider_host,
+        config.llm_model,
+        len(payload),
+        locale,
+    )
     system = """You classify local mathematical proof source blocks. Return a structural proposal, not proof evidence. Preserve the supplied IDs and never invent a step. Definitions, hypotheses, and cited lemmas use verification_target=none. A deduction uses sympy only for closed local algebra/calculation; use rule for a named bounded rewrite or theorem-specific validator. A theorem citation is a lemma, not a verified deduction. An approximation with an omitted remainder must remain rule and identify the missing error-bound obligation. Do not claim anything verified."""
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
             response = await client.post(
-                f"{config.llm_base_url.rstrip('/')}/v1/chat/completions",
+                config.llm_chat_completions_url,
                 headers={"Authorization": f"Bearer {config.llm_api_key}", "Content-Type": "application/json"},
                 json={
                     "model": config.llm_model,
@@ -148,15 +157,32 @@ async def propose_semantic_structure(graph: dict[str, Any], locale: str) -> tupl
             raw_content = response.json()["choices"][0]["message"]["content"]
             proposal = validate_semantic_proposal(json.loads(raw_content), graph)
             if proposal is None:
-                logger.warning("Rejected source-unbound semantic proof proposal")
+                logger.warning("semantic_parse.unavailable reason=proposal_rejected")
                 return None, {"status": "unavailable", "reason": "proposal_rejected", "notice": "The LLM response could not be tied safely to the document source steps."}
+            logger.info(
+                "semantic_parse.proposed fragments=%d steps=%d model=%s",
+                len(proposal["fragments"]),
+                len(proposal["steps"]),
+                config.llm_model,
+            )
             return proposal, {"status": "proposed", "reason": "", "notice": "Source-bound LLM structure proposal available."}
     except httpx.HTTPStatusError as exc:
-        logger.info("Semantic proof provider returned HTTP %s", exc.response.status_code)
         reason = "provider_authentication_failed" if exc.response.status_code in {401, 403} else "provider_request_failed"
+        logger.warning(
+            "semantic_parse.unavailable reason=%s provider=%s model=%s http_status=%s",
+            reason,
+            config.llm_provider_host,
+            config.llm_model,
+            exc.response.status_code,
+        )
         return None, {"status": "unavailable", "reason": reason, "notice": "The configured semantic-parser provider did not accept this request. Check the server-side LLM configuration."}
     except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        logger.info("Semantic proof proposal unavailable: %s", exc)
+        logger.warning(
+            "semantic_parse.unavailable reason=provider_request_failed provider=%s model=%s error_type=%s",
+            config.llm_provider_host,
+            config.llm_model,
+            type(exc).__name__,
+        )
         return None, {"status": "unavailable", "reason": "provider_request_failed", "notice": "The semantic-parser provider was unavailable; heuristic structure is shown instead."}
 
 

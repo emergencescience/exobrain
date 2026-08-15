@@ -208,7 +208,21 @@ async def verify(
     scope_metadata = _scope_metadata(req.scope)
     proof_graph = build_proof_graph(req.markdown, [result.model_dump() for result in results])
     if req.semantic_parse:
+        source_step_count = sum(len(fragment["steps"]) for fragment in proof_graph["fragments"])
+        logger.info(
+            "verification.semantic_parse.start document_id=%s scope=%s source_steps=%d locale=%s",
+            req.document_id or "ad-hoc",
+            req.scope.kind if req.scope else "document",
+            source_step_count,
+            req.locale,
+        )
         proposal, semantic_status = await propose_semantic_structure(proof_graph, req.locale)
+        logger.info(
+            "verification.semantic_parse.finish document_id=%s status=%s reason=%s",
+            req.document_id or "ad-hoc",
+            semantic_status["status"],
+            semantic_status.get("reason", ""),
+        )
         if proposal is not None:
             proof_graph = apply_semantic_proposal(proof_graph, proposal)
         else:
