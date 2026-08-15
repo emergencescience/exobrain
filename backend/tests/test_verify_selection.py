@@ -54,7 +54,7 @@ $$
         json={"document_id": document_id, "markdown": markdown, "locale": "en"},
     )
     assert whole_document.status_code == 200
-    whole_results = whole_document.json()["results"]
+    whole_results = whole_document.json()["snapshot"]["verification_results"]
     target = next(item for item in whole_results if item["claim_type"] == "differentiation")
 
     scoped = client.post(
@@ -81,14 +81,15 @@ $$
     }
     assert body["snapshot"]["verification_scope"] == body["scope"]
 
-    scoped_claim_ids = {item["claim_id"] for item in body["results"]}
+    scoped_results = body["snapshot"]["verification_results"]
+    scoped_claim_ids = {item["claim_id"] for item in scoped_results}
     assert target["claim_id"] in scoped_claim_ids
-    scoped_target = next(item for item in body["results"] if item["claim_id"] == target["claim_id"])
+    scoped_target = next(item for item in scoped_results if item["claim_id"] == target["claim_id"])
     assert scoped_target["assumption_claim_ids"]
-    assert any(item["claim_type"] == "assumption" for item in body["results"])
+    assert any(item["claim_type"] == "assumption" for item in scoped_results)
     assert all(
         item["claim_type"] == "assumption" or item["line"] >= target["line"]
-        for item in body["results"]
+        for item in scoped_results
     )
 
     snapshots = client.get(f"/api/documents/{document_id}/snapshots", headers=headers)

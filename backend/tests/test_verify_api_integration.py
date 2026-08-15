@@ -57,9 +57,13 @@ def test_verify_persists_snapshot_claims_and_keeps_claim_ids_stable(client: Test
     second_body = second.json()
     assert first_body["snapshot"]["id"] != second_body["snapshot"]["id"]
     assert first_body["snapshot"]["content_hash"] == second_body["snapshot"]["content_hash"]
-    assert first_body["results"][0]["claim_id"] == second_body["results"][0]["claim_id"]
-    assert first_body["results"][0]["line"] == 1
-    assert first_body["results"][0]["end_line"] == 1
+    assert "results" not in first_body
+    assert "results" not in second_body
+    first_results = first_body["snapshot"]["verification_results"]
+    second_results = second_body["snapshot"]["verification_results"]
+    assert first_results[0]["claim_id"] == second_results[0]["claim_id"]
+    assert first_results[0]["line"] == 1
+    assert first_results[0]["end_line"] == 1
 
     snapshots = client.get(
         f"/api/documents/{document_id}/snapshots",
@@ -68,7 +72,7 @@ def test_verify_persists_snapshot_claims_and_keeps_claim_ids_stable(client: Test
     assert snapshots.status_code == 200
     stored = snapshots.json()["snapshots"]
     assert len(stored) == 2
-    assert stored[0]["verification_results"][0]["claim_id"] == first_body["results"][0]["claim_id"]
+    assert stored[0]["verification_results"][0]["claim_id"] == first_results[0]["claim_id"]
 
 
 def test_verify_rejects_other_users_document(client: TestClient):
@@ -207,7 +211,7 @@ $$
     )
 
     assert response.status_code == 200
-    results = response.json()["results"]
+    results = response.json()["snapshot"]["verification_results"]
     assumption = next(result for result in results if result["claim_type"] == "assumption")
     derivative = next(result for result in results if result["claim_type"] == "differentiation")
     assert derivative["parent_claim_id"] is not None
@@ -239,3 +243,12 @@ def test_title_only_document_update_preserves_markdown_and_messages(client: Test
     assert document["title"] == "Renamed proof"
     assert document["markdown"] == original_markdown
     assert document["messages"] == original_messages
+
+
+def test_ad_hoc_verify_keeps_results_without_snapshot(client: TestClient):
+    response = client.post("/api/verify", json={"markdown": "$$x=x$$", "locale": "en"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["snapshot"] is None
+    assert body["results"][0]["status"] == "verified"

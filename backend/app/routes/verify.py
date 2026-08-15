@@ -64,6 +64,8 @@ def _claim_type(equation: str, detail: str, index: int) -> str:
     normalized = f"{equation} {detail}".lower()
     if index == 0:
         return "definition"
+    if "\\begin{aligned}" in equation:
+        return "calculation"
     if "\\sum" in equation or "\\int" in equation or "telescop" in normalized or "求和" in detail:
         return "summation"
     if "derivative" in normalized or "求导" in detail or "'" in equation:
@@ -244,8 +246,13 @@ async def verify(
             verification_scope=scope_metadata,
             proof_graph=proof_graph,
         )
-    return {
-        "results": [result.model_dump() for result in results],
+    response = {
         "snapshot": snapshot.to_dict() if snapshot else None,
         "scope": scope_metadata,
     }
+    # A persisted snapshot is the canonical evidence object. Do not mirror its
+    # verification results at the response root; retain root results only for
+    # ad-hoc verification requests that do not create a snapshot.
+    if snapshot is None:
+        response["results"] = [result.model_dump() for result in results]
+    return response

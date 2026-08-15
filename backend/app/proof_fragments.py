@@ -114,7 +114,7 @@ def _result_status(block: SourceBlock, verification_results: list[dict[str, Any]
         return "failed"
     if statuses == {"verified"}:
         return "locally_verified"
-    if "verified" in statuses:
+    if "verified" in statuses or "partially_checked" in statuses:
         return "partially_checked"
     return "inconclusive"
 

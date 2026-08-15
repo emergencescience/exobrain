@@ -43,6 +43,7 @@ type VerificationStatus =
   | "verified"
   | "failed"
   | "candidate"
+  | "partially_checked"
   | "inconclusive"
   | "insufficient_information"
   | "reasoned"
@@ -191,6 +192,7 @@ const COPY = {
     verified: "Verified",
     failed: "Failed",
     candidate: "Candidate",
+    partiallyChecked: "Partially checked",
     inconclusive: "Inconclusive",
     insufficient_information: "Needs information",
     reasoned: "Reasoned",
@@ -280,6 +282,7 @@ const COPY = {
     verified: "已验证",
     failed: "验证失败",
     candidate: "候选结果",
+    partiallyChecked: "已部分验证",
     inconclusive: "无法判定",
     insufficient_information: "信息不足",
     reasoned: "推理结果",
@@ -359,6 +362,7 @@ function statusMeta(status: VerificationStatus, copy: Copy) {
     verified: { label: copy.verified, className: `${shared} border-emerald-200 bg-emerald-50 text-emerald-800`, dot: "bg-emerald-500" },
     failed: { label: copy.failed, className: `${shared} border-rose-200 bg-rose-50 text-rose-800`, dot: "bg-rose-500" },
     candidate: { label: copy.candidate, className: `${shared} border-amber-200 bg-amber-50 text-amber-800`, dot: "bg-amber-500" },
+    partially_checked: { label: copy.partiallyChecked, className: `${shared} border-amber-200 bg-amber-50 text-amber-800`, dot: "bg-amber-500" },
     inconclusive: { label: copy.inconclusive, className: `${shared} border-amber-200 bg-amber-50 text-amber-800`, dot: "bg-amber-500" },
     insufficient_information: { label: copy.insufficient_information, className: `${shared} border-slate-200 bg-slate-50 text-slate-700`, dot: "bg-slate-400" },
     reasoned: { label: copy.reasoned, className: `${shared} border-sky-200 bg-sky-50 text-sky-800`, dot: "bg-sky-500" },
@@ -691,10 +695,11 @@ export default function ExobrainClient({
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const snapshot = data.snapshot as VerificationSnapshot | null;
-      setVerifyResults(data.results || []);
+      const responseResults = (snapshot?.verification_results || data.results || []) as VerifyResult[];
+      setVerifyResults(responseResults);
       setVerificationSnapshot(snapshot);
       setVerifiedMarkdown(markdown);
-      setSelectedClaimId(scope?.claim_id || data.results?.find((item: VerifyResult) => item.claim_type !== "assumption")?.claim_id || null);
+      setSelectedClaimId(scope?.claim_id || responseResults.find((item) => item.claim_type !== "assumption")?.claim_id || null);
       if (snapshot && currentDocId) await loadReviewContext(currentDocId, snapshot.id);
       else {
         setEvidenceLinks([]);
@@ -848,8 +853,8 @@ export default function ExobrainClient({
                   const renaming = project.id === renamingProjectId;
                   const menuOpen = project.id === projectMenuId;
                   const menuLabels = lang === "zh"
-                    ? { actions: "文档操作", download: "下载 Markdown", rename: "重命名", duplicate: "创建副本", delete: "删除" }
-                    : { actions: "Document actions", download: "Download Markdown", rename: "Rename", duplicate: "Duplicate", delete: "Delete" };
+                    ? { actions: "文档操作", download: "下载", rename: "重命名", duplicate: "创建副本", delete: "删除" }
+                    : { actions: "Actions", download: "Download", rename: "Rename", duplicate: "Duplicate", delete: "Delete" };
                   return (
                     <div key={project.id} onContextMenu={(event) => { event.preventDefault(); setProjectMenuId(menuOpen ? null : project.id); }} onKeyDown={(event) => { if (active && event.key === "F2") { event.preventDefault(); startRenameProject(project); } }} className={`group relative flex items-center gap-2 rounded-md border px-2 py-2 transition ${active ? "border-indigo-200 bg-indigo-50" : "border-transparent hover:bg-slate-100"}`}>
                       {renaming ? (
@@ -1012,43 +1017,57 @@ function markerMeta(status: VerificationStatus) {
   return { glyph: "!", tone: "border-amber-300 bg-amber-50 text-amber-700 shadow-amber-100", ring: "ring-amber-200" };
 }
 
-type LabelSegment = { key: string; markdown: string; result?: VerifyResult; startLine: number; endLine: number };
-
+type LabelSegment = { key: string; markdown: string; results?: VerifyResult[]; startLine: number; endLine: number };
 function expandToMarkdownBlock(lines: string[], startLine: number, endLine: number) {
   let openDisplayMath: number | null = null;
   for (let index = 0; index < lines.length; index += 1) {
-    if (!lines[index].trim().startsWith("$$")) continue;
-    if (openDisplayMath === null) {
-      openDisplayMath = index + 1;
+    const trimmed = lines[index].trim();
+    if (!trimmed.startsWith("$$")) continue;
+    const lineNumber = index + 1;
+    const closingDelimiter = trimmed.lastIndexOf("$$");
+    if (closingDelimiter > 0) {
+      if (lineNumber <= endLine && lineNumber >= startLine) return { startLine: lineNumber, endLine: lineNumber };
       continue;
     }
-    const closeDisplayMath = index + 1;
-    if (openDisplayMath <= endLine && closeDisplayMath >= startLine) {
-      return { startLine: openDisplayMath, endLine: closeDisplayMath };
+    if (openDisplayMath === null) {
+      openDisplayMath = lineNumber;
+      continue;
+    }
+    if (openDisplayMath <= endLine && lineNumber >= startLine) {
+      return { startLine: openDisplayMath, endLine: lineNumber };
     }
     openDisplayMath = null;
   }
   return { startLine, endLine };
 }
-
+function aggregateLabelStatus(results: VerifyResult[]): VerificationStatus {
+  if (results.some((result) => result.status === "failed" || result.status === "error")) return "failed";
+  if (results.every((result) => result.status === "verified")) return "verified";
+  if (results.some((result) => result.status === "verified" || result.status === "partially_checked")) return "partially_checked";
+  return "inconclusive";
+}
 function labelSegments(markdown: string, results: VerifyResult[]): LabelSegment[] {
   const lines = markdown.split("\n");
-  const sorted = [...results]
-    .filter((result) => result.line >= 1 && result.line <= lines.length)
-    .sort((left, right) => left.line - right.line || left.end_line - right.end_line)
-    .map((result) => {
-      const sourceRange = expandToMarkdownBlock(lines, result.line, Math.max(result.line, result.end_line || result.line));
-      return { result, ...sourceRange };
-    });
+  const grouped = new Map<string, { startLine: number; endLine: number; results: VerifyResult[] }>();
+  for (const result of [...results]
+    .filter((item) => item.line >= 1 && item.line <= lines.length)
+    .sort((left, right) => left.line - right.line || left.end_line - right.end_line)) {
+    const sourceRange = expandToMarkdownBlock(lines, result.line, Math.max(result.line, result.end_line || result.line));
+    const key = `${sourceRange.startLine}-${sourceRange.endLine}`;
+    const existing = grouped.get(key);
+    if (existing) existing.results.push(result);
+    else grouped.set(key, { ...sourceRange, results: [result] });
+  }
+  const groupedRanges = [...grouped.values()].sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
   const segments: LabelSegment[] = [];
   let cursor = 1;
-  for (const item of sorted) {
+  for (const item of groupedRanges) {
     const start = Math.max(cursor, item.startLine);
     const end = Math.min(lines.length, Math.max(start, item.endLine));
     if (start > cursor) {
       segments.push({ key: `plain-${cursor}`, markdown: lines.slice(cursor - 1, start - 1).join("\n"), startLine: cursor, endLine: start - 1 });
     }
-    segments.push({ key: item.result.claim_id, markdown: lines.slice(start - 1, end).join("\n"), result: item.result, startLine: start, endLine: end });
+    segments.push({ key: `claims-${item.startLine}-${item.endLine}`, markdown: lines.slice(start - 1, end).join("\n"), results: item.results, startLine: start, endLine: end });
     cursor = end + 1;
   }
   if (cursor <= lines.length) {
@@ -1056,7 +1075,6 @@ function labelSegments(markdown: string, results: VerifyResult[]): LabelSegment[
   }
   return segments.filter((segment) => segment.markdown.trim());
 }
-
 function LabelDocument({
   markdown,
   results,
@@ -1103,19 +1121,20 @@ function LabelDocument({
         {stale && <p className="mb-5 inline-flex rounded-md bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800">{copy.stale}</p>}
         <article className="exobrain-prose mx-auto max-w-3xl">
           {segments.map((segment) => {
-            const result = segment.result;
-            const marker = result ? markerMeta(result.status) : null;
-            const selected = result?.claim_id === openClaimId;
+            const segmentResults = segment.results || [];
+            const status = segmentResults.length ? aggregateLabelStatus(segmentResults) : null;
+            const marker = status ? markerMeta(status) : null;
+            const selected = segment.key === openClaimId;
             return (
               <section key={segment.key} id={`label-source-${segment.startLine}`} className={`relative scroll-mt-20 pr-12 ${selected ? "rounded-lg bg-indigo-50/50 px-3 py-1 -mx-3" : ""}`}>
                 <ReactMarkdown remarkPlugins={markdownPlugins} rehypePlugins={htmlPlugins}>{segment.markdown}</ReactMarkdown>
-                {result && marker && (
+                {status && marker && (
                   <div className="absolute right-0 top-2 z-10">
                     <button
                       type="button"
-                      onClick={() => setOpenClaimId(selected ? null : result.claim_id)}
+                      onClick={() => setOpenClaimId(selected ? null : segment.key)}
                       aria-expanded={selected}
-                      aria-label={`${copy.openEvidence}: ${statusMeta(result.status, copy).label}`}
+                      aria-label={`${copy.openEvidence}: ${statusMeta(status, copy).label}`}
                       className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs font-bold shadow-sm transition hover:scale-110 focus:outline-none focus:ring-2 ${marker.tone} ${marker.ring}`}
                     >
                       {marker.glyph}
@@ -1124,13 +1143,17 @@ function LabelDocument({
                       <div role="dialog" aria-label={copy.openEvidence} className="absolute right-0 top-8 z-30 w-80 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl ring-1 ring-slate-950/5">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{copy.claim} · L{result.line}–{result.end_line}</p>
-                            <span className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold ${statusMeta(result.status, copy).className}`}><i className={`h-1.5 w-1.5 rounded-full ${statusMeta(result.status, copy).dot}`} />{statusMeta(result.status, copy).label}</span>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{copy.claim} · L{segment.startLine}–{segment.endLine}</p>
+                            <span className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold ${statusMeta(status, copy).className}`}><i className={`h-1.5 w-1.5 rounded-full ${statusMeta(status, copy).dot}`} />{statusMeta(status, copy).label}</span>
                           </div>
                           <button type="button" onClick={() => setOpenClaimId(null)} aria-label={copy.closeEvidence} className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">×</button>
                         </div>
-                        <p className="mt-3 whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-700">{displayEquation(result.equation)}</p>
-                        <p className="mt-3 border-t border-slate-100 pt-3 text-xs leading-5 text-slate-600">{result.detail}</p>
+                        <div className="mt-3 space-y-3">
+                          {segmentResults.map((result, index) => <div key={result.claim_id} className={index ? "border-t border-slate-100 pt-3" : ""}>
+                            <p className="whitespace-pre-wrap font-mono text-[11px] leading-5 text-slate-700">{displayEquation(result.equation)}</p>
+                            <p className="mt-2 text-xs leading-5 text-slate-600">{result.detail}</p>
+                          </div>)}
+                        </div>
                       </div>
                     )}
                   </div>

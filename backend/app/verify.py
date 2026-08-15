@@ -270,6 +270,81 @@ def _top_level_equality_count(latex: str) -> int:
     return count
 
 
+def _strip_presentation_commands(latex: str) -> str:
+    """Remove display-only wrappers before deterministic symbolic checking."""
+    pattern = re.compile(r"\\(?:boldsymbol|mathbf|mathit|mathrm)\{([^{}]*)\}")
+    previous = None
+    normalized = latex
+    while normalized != previous:
+        previous = normalized
+        normalized = pattern.sub(r"\1", normalized)
+    return normalized
+
+
+def _top_level_equality_parts(latex: str) -> list[str]:
+    """Split all equality relations that are outside LaTeX brace groups."""
+    depth = 0
+    start = 0
+    parts: list[str] = []
+    for index, character in enumerate(latex):
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(depth - 1, 0)
+        elif character == "=" and depth == 0:
+            part = latex[start:index].strip()
+            if not part:
+                return []
+            parts.append(part)
+            start = index + 1
+    final = latex[start:].strip()
+    return [*parts, final] if parts and final else []
+
+
+def _verify_aligned_terminal_relation(latex: str) -> VerificationResult | None:
+    """Check only an independently executable terminal equality in aligned math.
+
+    An ``aligned`` environment is a proof chain, not one scalar equality.  We
+    preserve that distinction: when the final adjacent relation can be proved
+    deterministically, report partial evidence and leave every prior transform
+    explicitly unresolved.
+    """
+    if r"\begin{aligned}" not in latex or r"\end{aligned}" not in latex:
+        return None
+    body = latex.split(r"\begin{aligned}", 1)[1].split(r"\end{aligned}", 1)[0]
+    rows = [re.sub(r"[&\n]+", "", row).strip().lstrip("=") for row in re.split(r"\\\\", body) if row.strip()]
+    if not rows:
+        return None
+    parts = _top_level_equality_parts(rows[-1])
+    if len(parts) < 2:
+        return None
+    terminal = _strip_presentation_commands(f"{parts[-2]}={parts[-1].rstrip('.:')}")
+    terminal_result = verify_equation(terminal)
+    if terminal_result.status == "verified":
+        preceding_relations = max(0, len(rows) - 1)
+        return VerificationResult(
+            line=0,
+            equation=latex,
+            status="partially_checked",
+            detail=(
+                "Partially checked: the terminal relation "
+                f"`{terminal}` is deterministically verified. "
+                f"The preceding {preceding_relations} aligned transformation(s) remain separate proof obligations."
+            ),
+        )
+    if terminal_result.status in {"failed", "error"}:
+        return VerificationResult(
+            line=0,
+            equation=latex,
+            status=terminal_result.status,
+            detail=(
+                "The terminal relation of this aligned calculation is false or unparsable: "
+                f"{terminal_result.detail}"
+            ),
+        )
+    return None
+
+
 def _requires_structured_relation_check(latex: str) -> str | None:
     """Explain why an expression must not be treated as a plain SymPy equality."""
     if any(token in latex for token in (r"\cdots", r"\ldots", r"\dots", r"\vdots", r"\ddots")):
@@ -315,6 +390,9 @@ def verify_equation(latex: str) -> VerificationResult:
     For equalities (a = b): check if (a - b) simplifies to 0.
     For formulas (no =): verify structural validity.
     """
+    aligned_terminal_result = _verify_aligned_terminal_relation(latex)
+    if aligned_terminal_result is not None:
+        return aligned_terminal_result
     if _is_named_integral_definition(latex):
         return VerificationResult(
             line=0,
