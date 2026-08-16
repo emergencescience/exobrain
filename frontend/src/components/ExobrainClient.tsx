@@ -1042,6 +1042,7 @@ function markerMeta(status: VerificationStatus) {
   if (status === "verified") return { glyph: "✓", tone: "border-emerald-300 bg-emerald-50 text-emerald-700 shadow-emerald-100", ring: "ring-emerald-200" };
   if (status === "failed" || status === "error") return { glyph: "×", tone: "border-rose-300 bg-rose-50 text-rose-700 shadow-rose-100", ring: "ring-rose-200" };
   if (status === "not_required") return { glyph: "·", tone: "border-violet-300 bg-violet-50 text-violet-700 shadow-violet-100", ring: "ring-violet-200" };
+  if (status === "semantically_reviewed" || status === "reasoned") return { glyph: "•", tone: "border-sky-300 bg-sky-50 text-sky-700 shadow-sky-100", ring: "ring-sky-200" };
   return { glyph: "!", tone: "border-amber-300 bg-amber-50 text-amber-700 shadow-amber-100", ring: "ring-amber-200" };
 }
 
@@ -1073,6 +1074,7 @@ function aggregateLabelStatus(results: VerifyResult[]): VerificationStatus {
   if (!obligationResults.length) return "not_required";
   if (obligationResults.some((result) => result.status === "failed" || result.status === "error")) return "failed";
   if (obligationResults.every((result) => result.status === "verified")) return "verified";
+  if (obligationResults.every((result) => result.status === "verified" || result.status === "semantically_reviewed")) return "semantically_reviewed";
   if (obligationResults.some((result) => result.status === "verified" || result.status === "partially_checked")) return "partially_checked";
   return "inconclusive";
 }
