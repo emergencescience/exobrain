@@ -12,7 +12,9 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import RenderedMath from "@/components/RenderedMath";
+import RenderedMath from "./RenderedMath";
+import { exobrainApiUrl, type ExobrainRouteMode } from "./exobrainApi";
+import "./exobrain-prose.css";
 
 interface Message {
   role: "user" | "assistant";
@@ -167,9 +169,17 @@ interface EvidenceLink {
 type SourceScope = Required<Pick<VerificationScope, "start_line" | "end_line">> &
   Pick<VerificationScope, "claim_id"> & { kind: "block" | "claim" };
 
-interface Props {
+export interface ExobrainClientProps {
   lang?: "en" | "zh";
+  /** Engine origin (`http://localhost:8080`) or orchestrator gateway (`/api/play/exobrain`). */
   apiBaseUrl?: string;
+  routeMode?: ExobrainRouteMode;
+  getAuthHeaders?: () => Record<string, string>;
+  isAuthenticated?: () => boolean;
+  /** SaaS: open ConnectModal. Omit in OSS. */
+  onAuthRequired?: () => void;
+  /** OSS product chrome (logo + dashboard). Portal passes false. */
+  embedChrome?: boolean;
 }
 
 type WorkspaceTab = "edit" | "preview" | "label" | "review";
@@ -178,8 +188,8 @@ type MobilePane = "project" | "document" | "assistant";
 const COPY = {
   en: {
     product: "Exobrain",
-    project: "Project",
-    projects: "Projects",
+    project: "Library",
+    projects: "Documents",
     newDocument: "New document",
     newProject: "New project",
     noProjects: "No research documents yet",
@@ -268,8 +278,8 @@ const COPY = {
   },
   zh: {
     product: "Exobrain",
-    project: "项目",
-    projects: "项目",
+    project: "文库",
+    projects: "文档",
     newDocument: "新建文档",
     newProject: "新建项目",
     noProjects: "还没有研究文档",
@@ -360,7 +370,9 @@ const COPY = {
 type Copy = { [Key in keyof typeof COPY.en]: string };
 
 const DRAFT_STORAGE_KEY = "exobrain_workspace_draft_v2";
+const ANON_PENDING_KEY = "exobrain_anon_pending_v1";
 const CURRENT_PROJECT_KEY = "exobrain_current_project";
+const MAX_STORED_MESSAGES = 50;
 
 function defaultDocument(copy: Copy): string {
   return `# ${copy.documentTitle}\n\n## ${copy.claim}\n\nState the result you want to inspect. Keep assumptions, domains, units, and intermediate transformations explicit.\n\n## ${copy.evidence}\n\n$$\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$$\n\nAssumption: $x$ is real.\n`;
@@ -378,6 +390,36 @@ function readDraft(copy: Copy): { markdown: string; messages: Message[] } {
     };
   } catch {
     return { markdown: defaultDocument(copy), messages: [] };
+  }
+}
+
+function isMeaningfulDraft(draft: { markdown: string; messages: Message[] }, copy: Copy): boolean {
+  if (draft.messages.length > 0) return true;
+  const baseline = defaultDocument(copy).trim();
+  const text = (draft.markdown || "").trim();
+  return text.length > 0 && text !== baseline;
+}
+
+function readAnonymousPending(): { markdown: string; messages: Message[] } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(ANON_PENDING_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return {
+      markdown: typeof parsed.markdown === "string" ? parsed.markdown : "",
+      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearAnonymousPending() {
+  try {
+    localStorage.removeItem(ANON_PENDING_KEY);
+  } catch {
+    // Best-effort.
   }
 }
 
@@ -437,10 +479,18 @@ function scopeLabel(scope: VerificationScope | undefined, lang: "en" | "zh") {
   return lang === "zh" ? `选中区块 · ${range}` : `Selected block · ${range}`;
 }
 
+const NO_AUTH_HEADERS = (): Record<string, string> => ({});
+const ALWAYS_AUTHENTICATED = () => true;
+
 export default function ExobrainClient({
   lang = "en",
   apiBaseUrl = process.env.NEXT_PUBLIC_EXOBRAIN_API_URL || "http://localhost:8080",
-}: Props) {
+  routeMode = "engine",
+  getAuthHeaders = NO_AUTH_HEADERS,
+  isAuthenticated = ALWAYS_AUTHENTICATED,
+  onAuthRequired,
+  embedChrome = true,
+}: ExobrainClientProps) {
   const copy: Copy = COPY[lang];
   const initialDraft = useMemo(() => readDraft(copy), [copy]);
   const [projects, setProjects] = useState<DocumentRecord[]>([]);
@@ -469,6 +519,29 @@ export default function ExobrainClient({
   const [projectMenuId, setProjectMenuId] = useState<string | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
+  const authGate = Boolean(onAuthRequired);
+  const bootstrapped = useRef(false);
+
+  const apiFetch = useCallback(
+    async (path: string, init?: RequestInit) => {
+      const headers: Record<string, string> = {
+        ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...getAuthHeaders(),
+        ...((init?.headers as Record<string, string> | undefined) || {}),
+      };
+      const response = await fetch(exobrainApiUrl(apiBaseUrl, routeMode, path), { ...init, headers });
+      if (response.status === 401) onAuthRequired?.();
+      return response;
+    },
+    [apiBaseUrl, getAuthHeaders, onAuthRequired, routeMode],
+  );
+
+  const requireAuth = useCallback(() => {
+    if (!authGate) return true;
+    if (isAuthenticated()) return true;
+    onAuthRequired?.();
+    return false;
+  }, [authGate, isAuthenticated, onAuthRequired]);
 
   const markdownPlugins = useMemo(() => [remarkMath], []);
   const htmlPlugins = useMemo(() => [rehypeKatex], []);
@@ -478,14 +551,14 @@ export default function ExobrainClient({
 
   const loadEvidence = useCallback(async (documentId: string, snapshotId: string) => {
     try {
-      const response = await fetch(`${apiBaseUrl}/api/evidence/${snapshotId}?document_id=${documentId}`);
+      const response = await apiFetch(`evidence/${snapshotId}?document_id=${documentId}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       setEvidenceLinks(data.evidence || []);
     } catch {
       setEvidenceLinks([]);
     }
-  }, [apiBaseUrl]);
+  }, [apiFetch]);
 
   const activateSnapshot = useCallback(async (documentId: string, snapshot: VerificationSnapshot) => {
     setVerificationSnapshot(snapshot);
@@ -498,7 +571,7 @@ export default function ExobrainClient({
   const loadReviewContext = useCallback(async (documentId: string, preferredSnapshotId?: string) => {
     setSnapshotLoading(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/documents/${documentId}/snapshots`);
+      const response = await apiFetch(`documents/${documentId}/snapshots`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const snapshots = (data.snapshots || []) as VerificationSnapshot[];
@@ -517,30 +590,33 @@ export default function ExobrainClient({
     } finally {
       setSnapshotLoading(false);
     }
-  }, [activateSnapshot, apiBaseUrl]);
+  }, [activateSnapshot, apiFetch]);
 
   const persistDraft = useCallback((nextMarkdown: string, nextMessages: Message[]) => {
     try {
-      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ markdown: nextMarkdown, messages: nextMessages }));
+      const trimmed = { markdown: nextMarkdown, messages: nextMessages.slice(-MAX_STORED_MESSAGES) };
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(trimmed));
+      if (authGate && !isAuthenticated()) {
+        localStorage.setItem(ANON_PENDING_KEY, JSON.stringify(trimmed));
+      }
     } catch {
       // Draft persistence is intentionally best effort.
     }
-  }, []);
+  }, [authGate, isAuthenticated]);
 
   const fetchProjects = useCallback(async () => {
+    if (authGate && !isAuthenticated()) return [];
     try {
-      const response = await fetch(`${apiBaseUrl}/api/documents`);
-      if (!response.ok) return;
+      const response = await apiFetch("documents");
+      if (!response.ok) return [];
       const data = await response.json();
-      setProjects(data.documents || []);
+      const docs = (data.documents || []) as DocumentRecord[];
+      setProjects(docs);
+      return docs;
     } catch {
-      // Local drafts remain available when the backend is offline.
+      return [];
     }
-  }, [apiBaseUrl]);
-
-  useEffect(() => {
-    void fetchProjects();
-  }, [fetchProjects]);
+  }, [apiFetch, authGate, isAuthenticated]);
 
   useEffect(() => {
     persistDraft(markdown, messages);
@@ -573,23 +649,42 @@ export default function ExobrainClient({
     }
   }, [copy, loadReviewContext]);
 
-  const createProject = useCallback(async () => {
+  const createProject = useCallback(async (seed?: { title?: string; markdown?: string; messages?: Message[] }) => {
     setWorkspaceError(null);
+    const title = seed?.title || copy.documentTitle;
+    if (authGate && !isAuthenticated()) {
+      setCurrentDocId(null);
+      setDocumentTitle(title);
+      setMarkdown(seed?.markdown || defaultDocument(copy));
+      setMessages(seed?.messages || []);
+      setSaveState("saved");
+      setMobilePane("document");
+      return null;
+    }
     try {
-      const response = await fetch(`${apiBaseUrl}/api/documents`, {
+      const response = await apiFetch("documents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: copy.documentTitle }),
+        body: JSON.stringify({ title }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      const project = data.document as DocumentRecord;
+      let project = (await response.json()).document as DocumentRecord;
+      if (seed?.markdown || seed?.messages) {
+        const patched = await apiFetch(`documents/${project.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ markdown: seed.markdown, messages: seed.messages || [], title }),
+        });
+        if (patched.ok) project = (await patched.json()).document as DocumentRecord;
+      }
       setProjects((previous) => [project, ...previous]);
       openProject(project);
+      return project;
     } catch {
       setWorkspaceError(copy.apiError);
+      return null;
     }
-  }, [apiBaseUrl, copy, openProject]);
+  }, [apiFetch, authGate, copy, isAuthenticated, openProject]);
 
   const startRenameProject = useCallback((project: DocumentRecord) => {
     setRenamingProjectId(project.id);
@@ -597,11 +692,12 @@ export default function ExobrainClient({
     setProjectMenuId(null);
   }, [copy.documentTitle]);
   const commitRenameProject = useCallback(async (project: DocumentRecord) => {
+    if (!requireAuth()) return;
     const title = renameTitle.trim() || copy.documentTitle;
     setRenamingProjectId(null);
     if (title === project.title) return;
     try {
-      const response = await fetch(`${apiBaseUrl}/api/documents/${project.id}`, {
+      const response = await apiFetch(`documents/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
@@ -614,18 +710,19 @@ export default function ExobrainClient({
     } catch {
       setWorkspaceError(copy.apiError);
     }
-  }, [apiBaseUrl, copy.apiError, copy.documentTitle, currentDocId, renameTitle]);
+  }, [apiFetch, copy.apiError, copy.documentTitle, currentDocId, renameTitle, requireAuth]);
   const duplicateProject = useCallback(async (project: DocumentRecord) => {
+    if (!requireAuth()) return;
     try {
       const title = lang === "zh" ? `${project.title || copy.documentTitle} 副本` : `${project.title || copy.documentTitle} copy`;
-      const createdResponse = await fetch(`${apiBaseUrl}/api/documents`, {
+      const createdResponse = await apiFetch("documents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title }),
       });
       if (!createdResponse.ok) throw new Error(`HTTP ${createdResponse.status}`);
       const created = (await createdResponse.json()).document as DocumentRecord;
-      const copiedResponse = await fetch(`${apiBaseUrl}/api/documents/${created.id}`, {
+      const copiedResponse = await apiFetch(`documents/${created.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ markdown: project.markdown, messages: project.messages, title }),
@@ -638,11 +735,12 @@ export default function ExobrainClient({
     } catch {
       setWorkspaceError(copy.apiError);
     }
-  }, [apiBaseUrl, copy.apiError, copy.documentTitle, lang, openProject]);
+  }, [apiFetch, copy.apiError, copy.documentTitle, lang, openProject, requireAuth]);
   const deleteProject = useCallback(async (project: DocumentRecord) => {
+    if (!requireAuth()) return;
     if (!window.confirm(`${copy.delete}: ${project.title}?`)) return;
     try {
-      const response = await fetch(`${apiBaseUrl}/api/documents/${project.id}`, { method: "DELETE" });
+      const response = await apiFetch(`documents/${project.id}`, { method: "DELETE" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setProjects((previous) => previous.filter((item) => item.id !== project.id));
       if (currentDocId === project.id) {
@@ -661,13 +759,13 @@ export default function ExobrainClient({
     } catch {
       setWorkspaceError(copy.apiError);
     }
-  }, [apiBaseUrl, copy, currentDocId]);
+  }, [apiFetch, copy, currentDocId, requireAuth]);
 
   const saveDocument = useCallback(async () => {
     if (!currentDocId) return;
     setSaveState("saving");
     try {
-      const response = await fetch(`${apiBaseUrl}/api/documents/${currentDocId}`, {
+      const response = await apiFetch(`documents/${currentDocId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ markdown, messages, title: documentTitle || copy.documentTitle }),
@@ -681,7 +779,7 @@ export default function ExobrainClient({
       setSaveState("unsaved");
       setWorkspaceError(copy.apiError);
     }
-  }, [apiBaseUrl, copy.documentTitle, currentDocId, documentTitle, markdown, messages]);
+  }, [apiFetch, copy.documentTitle, currentDocId, documentTitle, markdown, messages]);
 
   useEffect(() => {
     if (!currentDocId || saveState !== "unsaved") return;
@@ -711,10 +809,11 @@ export default function ExobrainClient({
   };
 
   const verifyDocument = async (scope?: SourceScope) => {
+    if (!requireAuth()) return;
     setVerifying(true);
     setWorkspaceError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/verify`, {
+      const response = await apiFetch("verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ document_id: currentDocId || undefined, markdown, locale: lang, scope, semantic_parse: true }),
@@ -742,6 +841,7 @@ export default function ExobrainClient({
   };
 
   const sendMessage = async (preset?: string) => {
+    if (!requireAuth()) return;
     const text = (preset || input).trim();
     if (!text || loading) return;
     const nextMessages: Message[] = [...messages, { role: "user", content: text }];
@@ -750,7 +850,7 @@ export default function ExobrainClient({
     setLoading(true);
     setWorkspaceError(null);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/chat`, {
+      const response = await apiFetch("chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -802,21 +902,46 @@ export default function ExobrainClient({
     setProjectMenuId(null);
   }, [copy.documentTitle, currentDocId, documentTitle, markdown]);
 
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+    void (async () => {
+      if (authGate && isAuthenticated()) {
+        const pending = readAnonymousPending();
+        if (pending && isMeaningfulDraft(pending, copy)) {
+          const heading = pending.markdown.match(/^#\s+(.+)$/m)?.[1]?.trim();
+          await createProject({
+            title: heading || copy.documentTitle,
+            markdown: pending.markdown,
+            messages: pending.messages,
+          });
+          clearAnonymousPending();
+          return;
+        }
+        clearAnonymousPending();
+      }
+      await fetchProjects();
+    })();
+  }, [authGate, copy, createProject, fetchProjects, isAuthenticated]);
 
   const currentProject = projects.find((project) => project.id === currentDocId) || null;
   const showWorkspace = Boolean(currentDocId || currentProject);
 
   return (
-    <main className="min-h-screen bg-[#f7f8fa] text-slate-900 selection:bg-indigo-100">
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-3 backdrop-blur lg:px-5">
+    <main className={`${embedChrome ? "min-h-screen" : "h-[calc(100dvh-3.25rem)] overflow-hidden"} bg-[#f7f8fa] text-slate-900 selection:bg-indigo-100`}>
+      <header className={`sticky top-0 z-30 flex ${embedChrome ? "h-14" : "h-10"} items-center justify-between border-b border-slate-200 bg-white/95 px-3 backdrop-blur lg:px-5`}>
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-600 text-sm font-semibold text-white">S</div>
-          <div className="min-w-0 leading-tight">
-            <p className="truncate text-sm font-semibold tracking-tight text-slate-950">{copy.product}</p>
-          </div>
+          {embedChrome && (
+            <>
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-indigo-600 text-sm font-semibold text-white">S</div>
+              <div className="min-w-0 leading-tight">
+                <p className="truncate text-sm font-semibold tracking-tight text-slate-950">{copy.product}</p>
+              </div>
+            </>
+          )}
           {showWorkspace && (
             <>
-              <span className="hidden text-slate-300 md:block">/</span>
+              {embedChrome && <span className="hidden text-slate-300 md:block">/</span>}
               <span className="hidden max-w-[260px] truncate text-sm text-slate-600 md:block">{documentTitle || copy.documentTitle}</span>
             </>
           )}
@@ -829,9 +954,11 @@ export default function ExobrainClient({
               {saveState === "saved" ? copy.saved : saveState === "saving" ? copy.saving : copy.unsaved}
             </span>
           )}
-          <a href="/dashboard" className="hidden rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 sm:block">
-            {lang === "zh" ? "验证仪表板" : "Verification dashboard"}
-          </a>
+          {embedChrome && (
+            <a href="/dashboard" className="hidden rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 sm:block">
+              {lang === "zh" ? "验证仪表板" : "Verification dashboard"}
+            </a>
+          )}
           <button onClick={() => void createProject()} className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-500">
             {copy.newDocument}
           </button>
@@ -855,7 +982,7 @@ export default function ExobrainClient({
         </div>
       )}
 
-      <div className="lg:grid lg:h-[calc(100vh-56px)] lg:grid-cols-[248px_minmax(0,1fr)_360px] lg:overflow-hidden">
+      <div className={`lg:grid ${embedChrome ? "lg:h-[calc(100vh-56px)]" : "lg:h-[calc(100%-2.5rem)]"} lg:grid-cols-[248px_minmax(0,1fr)_360px] lg:overflow-hidden`}>
         <aside className={`${mobilePane === "project" ? "flex" : "hidden"} min-h-[calc(100vh-102px)] flex-col border-r border-slate-200 bg-[#fbfcfd] lg:flex lg:min-h-0`}>
           <div className="flex items-center justify-between border-b border-slate-200 px-3 py-3">
             <div>

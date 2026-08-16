@@ -1,24 +1,16 @@
-"""Document CRUD routes — project management API."""
+"""Document CRUD routes — files inside a project."""
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.config import config
-from app.storage import get_storage, StorageProtocol
+from app.storage import StorageProtocol, get_storage
+from app.tenant import get_project_id
 
 logger = logging.getLogger("exobrain.documents")
 router = APIRouter(prefix="/api/documents", tags=["documents"])
-
-
-def get_user_id(x_user_id: str | None = Header(default=None)) -> str:
-    """Resolve the acting user.
-
-    Online: the orchestrator forwards the authenticated user id as X-User-Id.
-    Offline/open-source: no header → single-user "local" namespace.
-    """
-    return x_user_id or "local"
 
 
 class CreateDocumentRequest(BaseModel):
@@ -33,34 +25,34 @@ class UpdateDocumentRequest(BaseModel):
 
 @router.get("")
 async def list_documents(
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
-    """List all documents owned by the current user."""
-    docs = await storage.list_documents(user_id)
+    """List all documents in the current project."""
+    docs = await storage.list_documents(project_id)
     return {"documents": [d.to_dict() for d in docs]}
 
 
 @router.post("")
 async def create_document(
     req: CreateDocumentRequest,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
-    """Create a new document / project owned by the current user."""
-    doc = await storage.create_document(user_id, title=req.title)
+    """Create a new document in the current project."""
+    doc = await storage.create_document(project_id, title=req.title)
     return {"document": doc.to_dict()}
 
 
 @router.get("/{doc_id}")
 async def get_document(
     doc_id: str,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
-    """Get a document by ID with full messages (owner-only)."""
+    """Get a document by ID with full messages (project-only)."""
     doc = await storage.get_document(doc_id)
-    if doc is None or doc.user_id != user_id:
+    if doc is None or doc.project_id != project_id:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"document": doc.to_dict()}
 
@@ -69,16 +61,12 @@ async def get_document(
 async def update_document(
     doc_id: str,
     req: UpdateDocumentRequest,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
-    """Update document markdown, messages and/or title (owner-only, partial).
-
-    Any field left null is preserved from the existing document — so a title-only
-    rename does not wipe content, and a content save does not require the title.
-    """
+    """Update document markdown, messages and/or title (project-only, partial)."""
     existing = await storage.get_document(doc_id)
-    if existing is None or existing.user_id != user_id:
+    if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=404, detail="Document not found")
     markdown = req.markdown if req.markdown is not None else existing.markdown
     if len(markdown) > config.max_document_chars:
@@ -99,12 +87,12 @@ async def update_document(
 @router.delete("/{doc_id}")
 async def delete_document(
     doc_id: str,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
-    """Delete a document and its snapshots (owner-only)."""
+    """Delete a document and its snapshots (project-only)."""
     existing = await storage.get_document(doc_id)
-    if existing is None or existing.user_id != user_id:
+    if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=404, detail="Document not found")
     ok = await storage.delete_document(doc_id)
     if not ok:
@@ -112,17 +100,15 @@ async def delete_document(
     return {"deleted": True}
 
 
-# ── Snapshots ──────────────────────────────────────────────────────────
-
 @router.get("/{doc_id}/snapshots")
 async def list_snapshots(
     doc_id: str,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
-    """List all snapshots for a document (owner-only)."""
+    """List all snapshots for a document (project-only)."""
     existing = await storage.get_document(doc_id)
-    if existing is None or existing.user_id != user_id:
+    if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=404, detail="Document not found")
     snaps = await storage.list_snapshots(doc_id)
     return {"snapshots": [s.to_dict() for s in snaps]}
@@ -132,12 +118,12 @@ async def list_snapshots(
 async def restore_snapshot(
     doc_id: str,
     snapshot_id: str,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
-    """Restore document to a specific snapshot (owner-only)."""
+    """Restore document to a specific snapshot (project-only)."""
     existing = await storage.get_document(doc_id)
-    if existing is None or existing.user_id != user_id:
+    if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=404, detail="Document not found")
     doc = await storage.restore_snapshot(doc_id, snapshot_id)
     if doc is None:

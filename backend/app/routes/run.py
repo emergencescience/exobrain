@@ -6,14 +6,15 @@ import tempfile
 import os
 import hashlib
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.storage import ExecutionArtifact, StorageProtocol, get_storage
+from app.tenant import get_project_id
 
 logger = logging.getLogger("exobrain.run")
 
-router = APIRouter(prefix="/api/play/exobrain", tags=["run"])
+router = APIRouter(tags=["run"])
 
 
 class RunRequest(BaseModel):
@@ -33,14 +34,11 @@ class RunResponse(BaseModel):
 MAX_OUTPUT_BYTES = 100_000  # 100KB max output
 
 
-def get_user_id(x_user_id: str | None = Header(default=None)) -> str:
-    return x_user_id or "local"
-
-
-@router.post("/run", response_model=RunResponse)
+@router.post("/api/run", response_model=RunResponse)
+@router.post("/api/play/exobrain/run", response_model=RunResponse)
 async def run_code(
     req: RunRequest,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
     """Execute Python code in a sandboxed subprocess and return stdout/stderr."""
@@ -52,7 +50,7 @@ async def run_code(
     document = None
     if req.document_id:
         document = await storage.get_document(req.document_id)
-        if document is None or document.user_id != user_id:
+        if document is None or document.project_id != project_id:
             raise HTTPException(status_code=404, detail="Document not found")
 
     # Write code to a temp file for execution

@@ -3,13 +3,14 @@ import hashlib
 import logging
 import re
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.config import config
 from app.proof_fragments import build_proof_graph
 from app.semantic_proof import apply_semantic_proposal, propose_semantic_structure
 from app.storage import LLMCallLog, StorageProtocol, get_storage
+from app.tenant import get_project_id
 from app.verify import normalize_latex_storage, verify_document
 
 logger = logging.getLogger("exobrain.verify")
@@ -46,12 +47,6 @@ class VerifyResult(BaseModel):
     crosses_paragraph: bool = False
     deterministic_status: str | None = None
     semantic_status: str | None = None
-
-
-def get_user_id(x_user_id: str | None = Header(default=None)) -> str:
-    """Use the identity forwarded by the authenticated orchestrator."""
-
-    return x_user_id or "local"
 
 
 _ASSUMPTION_PATTERN = re.compile(
@@ -148,7 +143,7 @@ def _apply_semantic_review_statuses(results: list[VerifyResult], proof_graph: di
 @router.post("/verify")
 async def verify(
     req: VerifyRequest,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
     """Verify a whole source document or a selected block and persist its evidence boundary."""
@@ -175,7 +170,7 @@ async def verify(
     document = None
     if req.document_id:
         document = await storage.get_document(req.document_id)
-        if document is None or document.user_id != user_id:
+        if document is None or document.project_id != project_id:
             raise HTTPException(status_code=404, detail="Document not found")
 
     content_hash = hashlib.sha256(req.markdown.encode("utf-8")).hexdigest()
@@ -331,11 +326,11 @@ async def list_llm_call_logs(
     document_id: str,
     limit: int = 50,
     storage: StorageProtocol = Depends(get_storage),
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
 ):
     """Return credential-free LLM audit records for the document owner only."""
     document = await storage.get_document(document_id)
-    if document is None or document.user_id != user_id:
+    if document is None or document.project_id != project_id:
         raise HTTPException(status_code=404, detail="Document not found")
     logs = await storage.list_llm_call_logs(document_id, limit=limit)
     return {"llm_call_logs": [log.to_dict() for log in logs]}

@@ -15,7 +15,7 @@ import uuid
 @dataclass
 class Document:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    user_id: str = "local"  # "local" for offline, UUID for online
+    project_id: str = "local"  # OSS default; SaaS value is an opaque project UUID
     title: str = "Untitled Paper"
     markdown: str = ""
     messages: list[dict] = field(default_factory=list)  # [{role, content}, ...]
@@ -25,7 +25,7 @@ class Document:
     def to_dict(self) -> dict:
         return {
             "id": self.id,
-            "user_id": self.user_id,
+            "project_id": self.project_id,
             "title": self.title,
             "markdown": self.markdown,
             "messages": self.messages,
@@ -37,7 +37,7 @@ class Document:
     def from_row(cls, row: dict) -> "Document":
         return cls(
             id=row["id"],
-            user_id=row.get("user_id", "local"),
+            project_id=row.get("project_id") or row.get("user_id", "local"),
             title=row.get("title", "Untitled Paper"),
             markdown=row.get("markdown", ""),
             messages=row.get("messages", []),
@@ -70,15 +70,6 @@ class Snapshot:
             "proof_graph": self.proof_graph,
             "created_at": self.created_at,
         }
-
-
-@dataclass
-class SnapshotShare:
-    """A revocable, opaque capability to read one immutable snapshot."""
-
-    token: str
-    snapshot_id: str
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass
@@ -149,8 +140,8 @@ class ClaimEvidenceLink:
 class StorageProtocol(Protocol):
     """Unified storage interface. Implementations: SQLite, Postgres."""
 
-    async def create_document(self, user_id: str, title: str = "Untitled Paper") -> Document: ...
-    async def list_documents(self, user_id: str) -> list[Document]: ...
+    async def create_document(self, project_id: str, title: str = "Untitled Paper") -> Document: ...
+    async def list_documents(self, project_id: str) -> list[Document]: ...
     async def get_document(self, doc_id: str) -> Document | None: ...
     async def update_document(self, doc_id: str, markdown: str, messages: list[dict], title: str | None = None) -> Document | None: ...
     async def delete_document(self, doc_id: str) -> bool: ...
@@ -167,9 +158,6 @@ class StorageProtocol(Protocol):
     ) -> Snapshot: ...
     async def list_snapshots(self, doc_id: str) -> list[Snapshot]: ...
     async def restore_snapshot(self, doc_id: str, snapshot_id: str) -> Document | None: ...
-    async def create_snapshot_share(self, snapshot_id: str) -> SnapshotShare: ...
-    async def get_shared_snapshot(self, token: str) -> Snapshot | None: ...
-    async def revoke_snapshot_share(self, snapshot_id: str, token: str) -> bool: ...
     async def save_execution_artifact(self, artifact: ExecutionArtifact) -> ExecutionArtifact: ...
     async def get_execution_artifact(self, artifact_id: str) -> ExecutionArtifact | None: ...
     async def link_claim_evidence(self, link: ClaimEvidenceLink) -> ClaimEvidenceLink: ...
