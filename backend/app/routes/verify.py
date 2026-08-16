@@ -58,12 +58,17 @@ _ASSUMPTION_PATTERN = re.compile(
     r"^\s*(?:assumption|assume|given|假设|前提|已知)\s*[:：]\s*(.+)$",
     re.IGNORECASE,
 )
+_COORDINATE_DEFINITION_PATTERN = re.compile(
+    r"^\s*[A-Za-z][A-Za-z0-9_{}^]*\s*=\s*\([^=]+\)\s*$"
+)
 
 
 def _claim_type(equation: str, detail: str, index: int) -> str:
     """Classify only evidence-backed relation types; unknown steps stay explicit."""
 
     normalized = f"{equation} {detail}".lower()
+    if _COORDINATE_DEFINITION_PATTERN.match(equation):
+        return "definition"
     if index == 0:
         return "definition"
     if "\\begin{aligned}" in equation:
@@ -210,7 +215,17 @@ async def verify(
     active_assumptions: list[str] = []
     previous_claim_id: str | None = None
     previous_end_line = 0
+    seen_equations: set[str] = set()
     for line, end_line, equation, status, detail, claim_type in candidates:
+        equation_key = re.sub(r"\s+", "", normalize_latex_storage(equation))
+        if _COORDINATE_DEFINITION_PATTERN.match(equation):
+            status = "not_required"
+            detail = "Definition or contextual assignment; no mathematical proof obligation is asserted."
+        elif status == "inconclusive" and equation_key in seen_equations:
+            status = "not_required"
+            claim_type = "context"
+            detail = "Repeated contextual relation; the corresponding source-bound proof unit is reviewed separately."
+        seen_equations.add(equation_key)
         claim_id = hashlib.sha256(
             f"{content_hash}:{line}:{end_line}:{equation}".encode("utf-8")
         ).hexdigest()[:20]

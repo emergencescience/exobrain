@@ -186,6 +186,9 @@ def _result_status(block: SourceBlock, verification_results: list[dict[str, Any]
     if not overlapping:
         return "not_checked"
     statuses = {str(result.get("status", "inconclusive")) for result in overlapping}
+    statuses.discard("not_required")
+    if not statuses:
+        return "not_required"
     if "error" in statuses or "failed" in statuses:
         return "failed"
     if statuses == {"verified"}:

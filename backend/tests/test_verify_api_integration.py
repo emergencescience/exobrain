@@ -266,3 +266,27 @@ def test_persisted_result_equation_uses_delimiter_free_latex(client: TestClient)
     equation = response.json()["snapshot"]["verification_results"][0]["equation"]
     assert equation == "x=x"
     assert not equation.startswith("$")
+
+
+
+def test_contextual_tuple_assignment_is_not_required(client: TestClient):
+    response = client.post("/api/verify", json={"markdown": "设投影点为\n$$Q=(x,y,0)$$\n"})
+    assert response.status_code == 200
+    result = next(item for item in response.json()["results"] if item["equation"] == "Q=(x,y,0)")
+    assert result["status"] == "not_required"
+    assert result["claim_type"] == "definition"
+
+
+def test_repeated_intermediate_relation_is_context_only(client: TestClient):
+    markdown = """$$z=r\\cos\\phi$$
+
+由此得到后续关系。
+
+$$z=r\\cos\\phi$$
+"""
+    response = client.post("/api/verify", json={"markdown": markdown})
+    assert response.status_code == 200
+    results = [item for item in response.json()["results"] if item["equation"] == "z=r\\cos\\phi"]
+    assert len(results) == 2
+    assert results[0]["status"] != "not_required"
+    assert results[1]["status"] == "not_required"

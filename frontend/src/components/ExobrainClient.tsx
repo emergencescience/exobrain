@@ -48,6 +48,7 @@ type VerificationStatus =
   | "insufficient_information"
   | "reasoned"
   | "semantically_reviewed"
+  | "not_required"
   | "error";
 
 interface VerifyResult {
@@ -219,6 +220,7 @@ const COPY = {
     inconclusive: "Inconclusive",
     insufficient_information: "Needs information",
     reasoned: "Reasoned",
+    notRequired: "Definition/context; not required",
     error: "Error",
     sourceRange: "Source",
     claim: "Claim",
@@ -308,6 +310,7 @@ const COPY = {
     inconclusive: "无法判定",
     insufficient_information: "信息不足",
     reasoned: "推理结果",
+    notRequired: "定义/上下文，无需验证",
     error: "错误",
     sourceRange: "源码位置",
     claim: "主张",
@@ -389,6 +392,7 @@ function statusMeta(status: VerificationStatus, copy: Copy) {
     insufficient_information: { label: copy.insufficient_information, className: `${shared} border-slate-200 bg-slate-50 text-slate-700`, dot: "bg-slate-400" },
     reasoned: { label: copy.reasoned, className: `${shared} border-sky-200 bg-sky-50 text-sky-800`, dot: "bg-sky-500" },
     semantically_reviewed: { label: copy.reasoned, className: `${shared} border-sky-200 bg-sky-50 text-sky-800`, dot: "bg-sky-500" },
+    not_required: { label: copy.notRequired, className: `${shared} border-violet-200 bg-violet-50 text-violet-800`, dot: "bg-violet-500" },
     error: { label: copy.error, className: `${shared} border-rose-200 bg-rose-50 text-rose-800`, dot: "bg-rose-500" },
   };
   return values[status] || values.error;
@@ -1036,6 +1040,7 @@ function EmptyDocumentState({ copy, onCreate }: { copy: Copy; onCreate: () => vo
 function markerMeta(status: VerificationStatus) {
   if (status === "verified") return { glyph: "✓", tone: "border-emerald-300 bg-emerald-50 text-emerald-700 shadow-emerald-100", ring: "ring-emerald-200" };
   if (status === "failed" || status === "error") return { glyph: "×", tone: "border-rose-300 bg-rose-50 text-rose-700 shadow-rose-100", ring: "ring-rose-200" };
+  if (status === "not_required") return { glyph: "·", tone: "border-violet-300 bg-violet-50 text-violet-700 shadow-violet-100", ring: "ring-violet-200" };
   return { glyph: "!", tone: "border-amber-300 bg-amber-50 text-amber-700 shadow-amber-100", ring: "ring-amber-200" };
 }
 
@@ -1063,8 +1068,10 @@ function expandToMarkdownBlock(lines: string[], startLine: number, endLine: numb
   return { startLine, endLine };
 }
 function aggregateLabelStatus(results: VerifyResult[]): VerificationStatus {
-  if (results.some((result) => result.status === "failed" || result.status === "error")) return "failed";
-  if (results.every((result) => result.status === "verified")) return "verified";
+  const obligationResults = results.filter((result) => result.status !== "not_required");
+  if (!obligationResults.length) return "not_required";
+  if (obligationResults.some((result) => result.status === "failed" || result.status === "error")) return "failed";
+  if (obligationResults.every((result) => result.status === "verified")) return "verified";
   if (results.some((result) => result.status === "verified" || result.status === "partially_checked")) return "partially_checked";
   return "inconclusive";
 }
