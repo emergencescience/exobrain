@@ -9,3 +9,27 @@ backend/app/data/*.json
 !backend/app/data/mpc_rag.json
 # Ignore SQLite database (runtime artifact)
 backend/app/data/*.db
+backend/app/data/*.db-wal
+backend/app/data/*.db-shm
+.env
+logs
+cache
+benchmarks
+
+# Reproducible frontend build and test outputs
+.next/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Python test and coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local browser E2E evidence captures
+docs/screenshots/
+
+# Local runtime and debug output
+*.log

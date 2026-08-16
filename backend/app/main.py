@@ -12,12 +12,20 @@ from app.config import config
 from app.routes.chat import router as chat_router
 from app.routes.compute import router as compute_router
 from app.routes.documents import router as documents_router
+from app.routes.dashboard import router as dashboard_router
+from app.routes.evidence import router as evidence_router
 from app.routes.verify import router as verify_router
 from app.routes.run import router as run_router
 from app.routes.shares import router as shares_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("exobrain")
+logger.info(
+    "llm_config provider=%s model=%s api_key_configured=%s",
+    config.llm_provider_host,
+    config.llm_model,
+    bool(config.llm_api_key),
+)
 
 app = FastAPI(
     title="Exobrain",
@@ -38,6 +46,8 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(compute_router)
 app.include_router(documents_router)
+app.include_router(dashboard_router)
+app.include_router(evidence_router)
 app.include_router(verify_router)
 app.include_router(run_router)
 app.include_router(shares_router)

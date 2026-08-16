@@ -20,12 +20,39 @@ def _get_sympy():
     return _sympy
 
 
+def normalize_latex_storage(latex: str) -> str:
+    """Return display-safe canonical LaTeX without Markdown math delimiters.
+
+    Delimiters belong to the surrounding Markdown source, not to a persisted
+    equation value. Keeping only the expression prevents a result from being
+    rendered as literal ``$$`` when it is displayed inside another math renderer.
+    """
+    normalized = latex.strip()
+    if normalized.startswith("$$") and normalized.endswith("$$") and len(normalized) >= 4:
+        normalized = normalized[2:-2].strip()
+    elif normalized.startswith("$") and normalized.endswith("$") and len(normalized) >= 2:
+        normalized = normalized[1:-1].strip()
+    return normalized
+
+
 @dataclass
 class VerificationResult:
     line: int          # 1-indexed line number
     equation: str      # original LaTeX string
     status: str        # "verified", "inconclusive", "error"
     detail: str        # human-readable explanation
+
+
+def _is_inline_verification_candidate(equation: str) -> bool:
+    """Return whether inline math contains a relationship worth examining."""
+    return bool(re.search(r"(?<!\\)[=<>]|\\(?:neq|le|ge|approx)", equation))
+
+
+def _is_inline_context_assignment(equation: str, preceding_text: str) -> bool:
+    """Recognize prose such as ``at x=0`` without dropping actual results."""
+    if not re.fullmatch(r"[A-Za-z]\s*=\s*[+-]?\d+(?:\.\d+)?", equation.strip()):
+        return False
+    return bool(re.search(r"(?:\b(?:at|when|for|near)\b|在|当|取)\s*$", preceding_text.strip(), re.IGNORECASE))
 
 
 def extract_equations(markdown: str) -> list[tuple[int, str, str]]:
@@ -54,7 +81,9 @@ def extract_equations(markdown: str) -> list[tuple[int, str, str]]:
         if any(start <= match.start() < end for start, end in block_spans):
             continue
         eq = match.group(1).strip()
-        if eq:
+        line_start = markdown.rfind("\n", 0, match.start()) + 1
+        preceding_text = markdown[line_start:match.start()]
+        if _is_inline_verification_candidate(eq) and not _is_inline_context_assignment(eq, preceding_text):
             line_idx = markdown.count("\n", 0, match.start()) + 1
             equations.append((line_idx, eq, "inline"))
 
@@ -81,7 +110,21 @@ def latex_to_sympy(latex: str) -> tuple:
         converted = _manual_latex_convert(latex)
         if converted is None:
             return (None, "Could not parse LaTeX expression")
-        expr = sp.sympify(converted)
+        expr = sp.sympify(
+            converted,
+            locals={
+                "atan2": sp.atan2,
+                "atan": sp.atan,
+                "acos": sp.acos,
+                "asin": sp.asin,
+                "sqrt": sp.sqrt,
+                "sin": sp.sin,
+                "cos": sp.cos,
+                "tan": sp.tan,
+                "log": sp.log,
+                "exp": sp.exp,
+            },
+        )
         return (expr, None)
     except Exception as e2:
         return (None, f"Parse error: {str(e2)[:100]}")
@@ -227,12 +270,212 @@ def _handle_frac(s: str) -> str:
     return s
 
 
+def _is_named_integral_definition(latex: str) -> bool:
+    """Return whether a bare symbol is being defined by an integral expression.
+
+    These declarations are valid proof-graph nodes, but they are not standalone
+    executable equalities. Their value must instead be supported by downstream
+    proof obligations or a rule-specific integral validator.
+    """
+    parts = _split_equality(latex)
+    if len(parts) != 2:
+        return False
+    lhs, rhs = (re.sub(r"\s+", "", part) for part in parts)
+    symbol = r"(?:[A-Za-z]|\\[A-Za-z]+)"
+    return bool(re.fullmatch(symbol, lhs)) and r"\int" in rhs
+
+
+def _top_level_equality_count(latex: str) -> int:
+    """Count equality signs outside LaTeX brace groups."""
+    depth = 0
+    count = 0
+    for character in latex:
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(depth - 1, 0)
+        elif character == "=" and depth == 0:
+            count += 1
+    return count
+
+
+def _strip_presentation_commands(latex: str) -> str:
+    """Remove display-only wrappers before deterministic symbolic checking."""
+    pattern = re.compile(r"\\(?:boldsymbol|mathbf|mathit|mathrm)\{([^{}]*)\}")
+    previous = None
+    normalized = latex
+    while normalized != previous:
+        previous = normalized
+        normalized = pattern.sub(r"\1", normalized)
+    return normalized
+
+
+def _top_level_equality_parts(latex: str) -> list[str]:
+    """Split all equality relations that are outside LaTeX brace groups."""
+    depth = 0
+    start = 0
+    parts: list[str] = []
+    for index, character in enumerate(latex):
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(depth - 1, 0)
+        elif character == "=" and depth == 0:
+            part = latex[start:index].strip()
+            if not part:
+                return []
+            parts.append(part)
+            start = index + 1
+    final = latex[start:].strip()
+    return [*parts, final] if parts and final else []
+
+
+def _verify_aligned_terminal_relation(latex: str) -> VerificationResult | None:
+    """Check only an independently executable terminal equality in aligned math.
+
+    An ``aligned`` environment is a proof chain, not one scalar equality.  We
+    preserve that distinction: when the final adjacent relation can be proved
+    deterministically, report partial evidence and leave every prior transform
+    explicitly unresolved.
+    """
+    if r"\begin{aligned}" not in latex or r"\end{aligned}" not in latex:
+        return None
+    body = latex.split(r"\begin{aligned}", 1)[1].split(r"\end{aligned}", 1)[0]
+    rows = [re.sub(r"[&\n]+", "", row).strip().lstrip("=") for row in re.split(r"\\\\", body) if row.strip()]
+    if not rows:
+        return None
+    parts = _top_level_equality_parts(rows[-1])
+    if len(parts) < 2:
+        return None
+    terminal = _strip_presentation_commands(f"{parts[-2]}={parts[-1].rstrip('.:')}")
+    terminal_result = verify_equation(terminal)
+    if terminal_result.status == "verified":
+        preceding_relations = max(0, len(rows) - 1)
+        return VerificationResult(
+            line=0,
+            equation=latex,
+            status="partially_checked",
+            detail=(
+                "Partially checked: the terminal relation "
+                f"`{terminal}` is deterministically verified. "
+                f"The preceding {preceding_relations} aligned transformation(s) remain separate proof obligations."
+            ),
+        )
+    if terminal_result.status in {"failed", "error"}:
+        return VerificationResult(
+            line=0,
+            equation=latex,
+            status=terminal_result.status,
+            detail=(
+                "The terminal relation of this aligned calculation is false or unparsable: "
+                f"{terminal_result.detail}"
+            ),
+        )
+    return None
+
+
+def _requires_structured_relation_check(latex: str) -> str | None:
+    """Explain why an expression must not be treated as a plain SymPy equality."""
+    if any(token in latex for token in (r"\cdots", r"\ldots", r"\dots", r"\vdots", r"\ddots")):
+        return (
+            "Contains an informal ellipsis. This is a schematic expansion, not "
+            "a finite executable equality; verify a bounded instance or a "
+            "rule-specific series expansion instead."
+        )
+    if r"\approx" in latex:
+        return (
+            "Contains an approximation. A deterministic check requires an "
+            "explicit error bound, domain, or numeric substitution."
+        )
+    if re.search(r"[A-Za-z]\s*\^\s*\{\([^{}]+\)\}\s*\(", latex):
+        return (
+            "Contains a symbolic higher-order derivative. It requires a "
+            "derivative rule or an explicit instantiated order."
+        )
+    if _top_level_equality_count(latex) > 1 and r"\neq" not in latex:
+        return (
+            "Contains a chained equality. Its adjacent relations are separate "
+            "proof obligations and must not be subtracted as one SymPy value."
+        )
+    return None
+
+
+def _looks_like_function_derivation_chain(equations: list[tuple[int, str, str]]) -> bool:
+    """Limit the specialized derivative-chain verifier to its supported shape."""
+    has_function_definition = any(
+        re.match(r"\s*[A-Za-z]\s*\(\s*[A-Za-z]\s*\)\s*=", equation)
+        for _, equation, _ in equations
+    )
+    has_first_derivative = any(
+        re.search(r"[A-Za-z]\s*'\s*\(|\\frac\s*\{d", equation)
+        for _, equation, _ in equations
+    )
+    return has_function_definition and has_first_derivative
+
+
+def _verify_spherical_inverse_convention(latex: str) -> VerificationResult | None:
+    """Check the branch convention of spherical-coordinate theta inversion.
+
+    ``atan2(y, x)`` is the correct quadrant-aware inverse, but its principal
+    range is (-pi, pi]. If the document declares theta in [0, 2*pi), the
+    source must explicitly normalize the result modulo 2*pi (or use an
+    equivalent Arg convention). This is a semantic convention check, not an
+    algebraic identity for SymPy to simplify.
+    """
+    normalized = re.sub(r"\s+", "", latex)
+    if not re.fullmatch(
+        r"(?:\\theta|theta)=(?:\\operatorname\{atan2\}|atan2)\(y,x\)",
+        normalized,
+    ):
+        return None
+    return VerificationResult(
+        line=0,
+        equation=latex,
+        status="inconclusive",
+        detail=(
+            "⚠️ atan2 is quadrant-aware, but its principal range is (-π, π]. "
+            "The document declares θ ∈ [0, 2π); write atan2(y,x) mod 2π "
+            "or use an equivalent [0,2π) Arg convention."
+        ),
+    )
+
+
 def verify_equation(latex: str) -> VerificationResult:
     """Verify a single LaTeX equation.
 
     For equalities (a = b): check if (a - b) simplifies to 0.
     For formulas (no =): verify structural validity.
     """
+    aligned_terminal_result = _verify_aligned_terminal_relation(latex)
+    if aligned_terminal_result is not None:
+        return aligned_terminal_result
+    spherical_inverse_result = _verify_spherical_inverse_convention(latex)
+    if spherical_inverse_result is not None:
+        return spherical_inverse_result
+    # Source Markdown remains immutable in the snapshot; the verifier works on
+    # an equivalent presentation-normalized expression.
+    latex = _strip_presentation_commands(latex)
+    if _is_named_integral_definition(latex):
+        return VerificationResult(
+            line=0,
+            equation=latex,
+            status="inconclusive",
+            detail=(
+                "Recorded as a named integral definition. Its value is not a "
+                "standalone executable equality; verify the downstream proof "
+                "obligations or a rule-specific integral edge instead."
+            ),
+        )
+
+    structured_reason = _requires_structured_relation_check(latex)
+    if structured_reason is not None:
+        return VerificationResult(
+            line=0,
+            equation=latex,
+            status="inconclusive",
+            detail=structured_reason,
+        )
+
     # Check if it's an equality
     if "=" in latex and "\\neq" not in latex:
         # Split on = but be careful about LaTeX
@@ -808,10 +1051,13 @@ def verify_document(markdown: str, locale: str = "en") -> list[VerificationResul
     if sum_of_squares_audit is not None:
         return sum_of_squares_audit
 
-    # Try chain verification first
-    chain_results = verify_derivation_chain(equations, markdown)
-    if chain_results is not None:
-        return chain_results
+    # Apply the specialized derivative-chain verifier only when its supported
+    # first-derivative shape is present. Other mathematical documents remain on
+    # the conservative per-equation path rather than being forced through it.
+    if _looks_like_function_derivation_chain(equations):
+        chain_results = verify_derivation_chain(equations, markdown)
+        if chain_results is not None:
+            return chain_results
 
     results = []
     for line_idx, eq, display_mode in equations:

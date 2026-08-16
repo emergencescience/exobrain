@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+from app.storage import LLMCallLog
 from app.storage.sqlite_storage import SQLiteStorage
 from app.verify import extract_equations
 
@@ -65,5 +66,31 @@ def test_sqlite_snapshot_retains_immutable_verification_provenance(tmp_path):
                 "status": "verified",
             }
         ]
+
+    run(scenario())
+
+
+def test_sqlite_persists_credential_free_llm_call_logs(tmp_path):
+    async def scenario():
+        storage = SQLiteStorage(str(tmp_path / "exobrain.db"))
+        await storage.init()
+        document = await storage.create_document("researcher-1", "Proof")
+        log = LLMCallLog(
+            document_id=document.id,
+            source_hash="content-sha256",
+            call_name="semantic_proof_structure",
+            system_prompt_name="semantic-proof-structure-v1",
+            provider="example.invalid",
+            model="test-model",
+            request_payload={"locale": "en", "source_steps": [{"id": "step-1"}]},
+            response_text='{"steps": []}',
+            status="proposed",
+            http_status=200,
+        )
+        await storage.save_llm_call_log(log)
+        stored = await storage.list_llm_call_logs(document.id)
+        assert stored[0].system_prompt_name == "semantic-proof-structure-v1"
+        assert stored[0].response_text == '{"steps": []}'
+        assert stored[0].request_payload["source_steps"][0]["id"] == "step-1"
 
     run(scenario())

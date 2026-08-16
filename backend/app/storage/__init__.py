@@ -54,6 +54,8 @@ class Snapshot:
     messages: list[dict] = field(default_factory=list)
     content_hash: str = ""
     verification_results: list[dict] = field(default_factory=list)
+    verification_scope: dict = field(default_factory=lambda: {"kind": "document"})
+    proof_graph: dict = field(default_factory=lambda: {"schema_version": "proof-dependency-graph-v1", "fragments": [], "dependencies": []})
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> dict:
@@ -64,6 +66,8 @@ class Snapshot:
             "messages": self.messages,
             "content_hash": self.content_hash,
             "verification_results": self.verification_results,
+            "verification_scope": self.verification_scope,
+            "proof_graph": self.proof_graph,
             "created_at": self.created_at,
         }
 
@@ -74,6 +78,68 @@ class SnapshotShare:
 
     token: str
     snapshot_id: str
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+@dataclass
+class ExecutionArtifact:
+    """A bounded, immutable record of one user-requested code execution."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    document_id: str = ""
+    code: str = ""
+    code_hash: str = ""
+    stdout: str = ""
+    stderr: str = ""
+    exit_code: int = 0
+    truncated: bool = False
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+@dataclass
+class LLMCallLog:
+    """Immutable audit record for one server-side LLM request, without secrets."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    document_id: str = ""
+    source_hash: str = ""
+    call_name: str = ""
+    system_prompt_name: str = ""
+    provider: str = ""
+    model: str = ""
+    request_payload: dict = field(default_factory=dict)
+    response_text: str = ""
+    status: str = ""
+    http_status: int | None = None
+    error_type: str = ""
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "document_id": self.document_id,
+            "source_hash": self.source_hash,
+            "call_name": self.call_name,
+            "system_prompt_name": self.system_prompt_name,
+            "provider": self.provider,
+            "model": self.model,
+            "request_payload": self.request_payload,
+            "response_text": self.response_text,
+            "status": self.status,
+            "http_status": self.http_status,
+            "error_type": self.error_type,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass
+class ClaimEvidenceLink:
+    """An explicit user-approved link from an execution artifact to one claim."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    snapshot_id: str = ""
+    claim_id: str = ""
+    artifact_id: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -96,12 +162,18 @@ class StorageProtocol(Protocol):
         *,
         content_hash: str = "",
         verification_results: list[dict] | None = None,
+        verification_scope: dict | None = None,
+        proof_graph: dict | None = None,
     ) -> Snapshot: ...
     async def list_snapshots(self, doc_id: str) -> list[Snapshot]: ...
     async def restore_snapshot(self, doc_id: str, snapshot_id: str) -> Document | None: ...
     async def create_snapshot_share(self, snapshot_id: str) -> SnapshotShare: ...
     async def get_shared_snapshot(self, token: str) -> Snapshot | None: ...
     async def revoke_snapshot_share(self, snapshot_id: str, token: str) -> bool: ...
+    async def save_execution_artifact(self, artifact: ExecutionArtifact) -> ExecutionArtifact: ...
+    async def get_execution_artifact(self, artifact_id: str) -> ExecutionArtifact | None: ...
+    async def link_claim_evidence(self, link: ClaimEvidenceLink) -> ClaimEvidenceLink: ...
+    async def list_claim_evidence(self, snapshot_id: str) -> list[ClaimEvidenceLink]: ...
 
 
 # ── Factory ────────────────────────────────────────────────────────────
