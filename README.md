@@ -13,8 +13,10 @@
 ## Quick Start
 
 ```bash
-# Set your LLM API key
-export EXOBRAIN_LLM_API_KEY="sk-your-deepseek-key"
+# Set your OpenAI-compatible LLM credentials
+export OPENAI_API_KEY="sk-your-deepseek-key"
+export OPENAI_API_BASE="https://api.deepseek.com"
+export OPENAI_MODEL="deepseek-chat"
 
 # Start everything
 docker-compose up -d
@@ -96,9 +98,9 @@ All via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EXOBRAIN_LLM_API_KEY` | (required) | Your LLM API key |
-| `EXOBRAIN_LLM_BASE_URL` | `https://api.deepseek.com` | OpenAI-compatible base URL |
-| `EXOBRAIN_LLM_MODEL` | `deepseek-chat` | Model name |
+| `OPENAI_API_KEY` | (required for chat) | LLM API key |
+| `OPENAI_API_BASE` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
+| `OPENAI_MODEL` | `deepseek-v4-pro` | Model name |
 | `EXOBRAIN_RAG_INDEX` | (empty) | Path to pre-built RAG index JSON |
 | `EXOBRAIN_RAG_TOP_K` | `3` | Number of RAG chunks to retrieve |
 | `EXOBRAIN_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
