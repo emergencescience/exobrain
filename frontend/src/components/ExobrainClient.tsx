@@ -107,10 +107,32 @@ interface ProofFragment {
   source: { start_line: number; end_line: number };
   steps: ProofStep[];
 }
+interface SemanticProofUnit {
+  id: string;
+  title: string;
+  source: { start_line: number; end_line: number };
+  step_ids: string[];
+  text: string;
+  local_status: ProofStep["local_status"];
+}
+
+interface SemanticUnitDependency {
+  id: string;
+  from_unit_id: string;
+  to_unit_id: string;
+  kind: ProofDependency["kind"];
+  edge_status: ProofDependency["edge_status"];
+  reason: string;
+  semantic_proposal?: boolean;
+  validator?: ProofDependency["validator"];
+}
+
 interface ProofGraph {
   schema_version: string;
   fragments: ProofFragment[];
   dependencies: ProofDependency[];
+  semantic_units?: SemanticProofUnit[];
+  semantic_unit_dependencies?: SemanticUnitDependency[];
   limitations?: string[];
   semantic_proposal?: {
     status: "proposed" | "unavailable";
@@ -1211,19 +1233,20 @@ function ReviewPanel({
   const [view, setView] = useState<"map" | "edges" | "graph" | "evidence">("map");
   const allSteps = proofGraph?.fragments.flatMap((fragment) => fragment.steps) || [];
   const stepById = new Map(allSteps.map((step) => [step.id, step]));
-  const proofEdges = [...(proofGraph?.dependencies || [])
-    .filter((edge) => (edge.review_visible === true || Boolean(edge.validator)) && stepById.has(edge.from_step_id) && stepById.has(edge.to_step_id))
-    .reduce((selected, edge) => {
-      const key = `${edge.from_step_id}:${edge.to_step_id}`;
-      const priority = (candidate: ProofGraph["dependencies"][number]) => {
-        if (candidate.edge_status === "verified" || candidate.edge_status === "verified_under_assumptions") return 100;
-        return ({ justifies: 50, requires_assumption: 45, uses_definition: 40, formula_transform: 30, substitutes_result: 20, derives: 10 } as Record<string, number>)[candidate.kind] || 0;
-      };
-      const previous = selected.get(key);
-      if (!previous || priority(edge) > priority(previous)) selected.set(key, edge);
-      return selected;
-    }, new Map<string, ProofGraph["dependencies"][number]>())
-    .values()];
+  const semanticUnits = proofGraph?.semantic_units || [];
+  const semanticUnitById = new Map(semanticUnits.map((unit) => [unit.id, unit]));
+  const usesSemanticUnits = semanticUnits.length > 0 && proofGraph?.semantic_proposal?.status === "proposed";
+  const rawProofEdges = (proofGraph?.dependencies || [])
+    .filter((edge) => (edge.review_visible === true || Boolean(edge.validator)) && stepById.has(edge.from_step_id) && stepById.has(edge.to_step_id));
+  const projectedProofEdges = (proofGraph?.semantic_unit_dependencies || [])
+    .filter((edge) => semanticUnitById.has(edge.from_unit_id) && semanticUnitById.has(edge.to_unit_id));
+  const proofEdges = usesSemanticUnits ? projectedProofEdges : rawProofEdges;
+  const edgeSource = (edge: ProofDependency | SemanticUnitDependency) => usesSemanticUnits
+    ? semanticUnitById.get((edge as SemanticUnitDependency).from_unit_id)
+    : stepById.get((edge as ProofDependency).from_step_id);
+  const edgeTarget = (edge: ProofDependency | SemanticUnitDependency) => usesSemanticUnits
+    ? semanticUnitById.get((edge as SemanticUnitDependency).to_unit_id)
+    : stepById.get((edge as ProofDependency).to_step_id);
   const verifiedEdges = proofEdges.filter((edge) => edge.edge_status === "verified" || edge.edge_status === "verified_under_assumptions").length;
   const reviewedEdges = proofEdges.filter((edge) => edge.edge_status === "semantically_reviewed").length;
   const openEdges = proofEdges.length - verifiedEdges - reviewedEdges;
@@ -1272,15 +1295,18 @@ function ReviewPanel({
             {view === "edges" && <div className="mt-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-indigo-900"><span>{labels.edgeSummary}</span><span className="font-semibold">{verifiedEdges} {copy.verified} · {reviewedEdges} {lang === "zh" ? "结构审阅" : "structurally reviewed"} · {openEdges} {labels.openEdges}</span></div>
               {!proofEdges.length ? <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-xs leading-5 text-slate-500">{labels.noGraph}</div> : proofEdges.map((edge) => {
-                const source = stepById.get(edge.from_step_id)!;
-                const target = stepById.get(edge.to_step_id)!;
+                const source = edgeSource(edge)!;
+                const target = edgeTarget(edge)!;
                 const meta = edgeStatusMeta(edge.edge_status);
                 const validator = edge.validator as { id?: string; label?: string; method?: string; evidence?: Record<string, unknown> } | undefined;
                 const focusLine = Math.min(source.source.start_line, target.source.start_line);
+                const sourceUnitTitle = usesSemanticUnits ? (source as SemanticProofUnit).title : null;
+                const targetUnitTitle = usesSemanticUnits ? (target as SemanticProofUnit).title : null;
                 return <article key={edge.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold ${meta.className}`}><i className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}</span><span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{edge.kind.replaceAll("_", " ")}</span></div><button onClick={() => onFocusSource(focusLine)} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-[10px] font-semibold text-indigo-700 transition hover:border-indigo-200 hover:bg-indigo-50">{labels.source} · L{source.source.start_line}–{target.source.end_line}</button></div>
-                  <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-center"><div><p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{labels.upstream}</p><PrettyFormula source={source.text} compact /></div><div className="hidden text-center text-lg text-indigo-400 lg:block">→</div><div><p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{labels.downstream}</p><PrettyFormula source={target.text} compact /></div></div>
-                  <p className="mt-3 text-xs leading-5 text-slate-600">{edge.reason}</p>
+                  {sourceUnitTitle && targetUnitTitle && <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-semibold text-indigo-700"><span className="rounded-full bg-indigo-50 px-2 py-1">{sourceUnitTitle}</span><span className="text-slate-300">→</span><span className="rounded-full bg-indigo-50 px-2 py-1">{targetUnitTitle}</span></div>}
+                  <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center"><div><p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{labels.upstream}</p><PrettyFormula source={source.text} compact /></div><div className="hidden text-center text-lg text-indigo-400 md:block">→</div><div><p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">{labels.downstream}</p><PrettyFormula source={target.text} compact /></div></div>
+                  <p className="mt-3 text-xs leading-5 text-slate-600">{edge.reason || (lang === "zh" ? "已按原文来源绑定的结构关系。" : "Source-bound structural relation.")}</p>
                   {validator && <details className="mt-3 rounded-lg border border-slate-100 bg-slate-50 p-3"><summary className="cursor-pointer text-xs font-semibold text-slate-700">{labels.ruleEvidence}{validator.label ? ` · ${validator.label}` : ""}</summary><p className="mt-2 text-xs leading-5 text-slate-600">{validator.method}</p>{validator.evidence && <pre className="mt-2 overflow-x-auto rounded bg-slate-950 p-2 text-[10px] leading-4 text-slate-100">{JSON.stringify(validator.evidence, null, 2)}</pre>}</details>}
                 </article>;
               })}

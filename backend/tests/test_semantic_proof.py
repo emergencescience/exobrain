@@ -414,3 +414,38 @@ def test_semantic_parser_marks_length_limited_provider_output_as_truncated(monke
     assert audit["error_type"] == "OutputTruncated"
     assert audit["http_status"] == 200
     assert '"finish_reason":"length"' in audit["response_text"]
+
+
+def test_semantic_units_group_bridge_with_following_formula():
+    from app.proof_fragments import build_proof_graph
+    from app.semantic_proof import apply_semantic_proposal, validate_semantic_proposal
+
+    markdown = r"""由几何关系可得
+$$
+\cos\theta=\frac{x}{r},\qquad \sin\theta=\frac{y}{r}
+$$
+因此正变换为
+$$
+x=r\cos\theta,\qquad y=r\sin\theta
+$$
+"""
+    graph = build_proof_graph(markdown, [])
+    steps = [step for fragment in graph["fragments"] for step in fragment["steps"]]
+    relation_prose, relation_formula, forward_prose, forward_formula = steps
+    proposal = validate_semantic_proposal({
+        "steps": [
+            {"id": relation_prose["id"], "unit": "Trigonometric relations", "role": "calculation", "target": "semantic", "dependencies": []},
+            {"id": relation_formula["id"], "unit": "Trigonometric relations", "role": "calculation", "target": "semantic", "dependencies": []},
+            {"id": forward_prose["id"], "unit": "Forward transformation", "role": "calculation", "target": "semantic", "dependencies": [relation_formula["id"]]},
+            {"id": forward_formula["id"], "unit": "Forward transformation", "role": "calculation", "target": "semantic", "dependencies": []},
+        ]
+    }, graph)
+
+    assert proposal is not None
+    annotated = apply_semantic_proposal(graph, proposal)
+    units = annotated["semantic_units"]
+    assert [unit["title"] for unit in units] == ["Trigonometric relations", "Forward transformation"]
+    assert units[1]["step_ids"] == [forward_prose["id"], forward_formula["id"]]
+    projected_edge = annotated["semantic_unit_dependencies"][0]
+    assert projected_edge["from_unit_id"] == units[0]["id"]
+    assert projected_edge["to_unit_id"] == units[1]["id"]

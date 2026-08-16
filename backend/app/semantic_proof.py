@@ -233,8 +233,11 @@ def validate_semantic_proposal(raw: dict[str, Any], graph: dict[str, Any]) -> di
             dependencies = []
         source_dependencies = [dep for dep in dependencies if isinstance(dep, str) and dep in known and dep != step_id]
         seen.add(step_id)
+        unit = str(item.get("unit", item.get("unit_title", ""))).strip()
+        unit = re.sub(r"\s+", " ", unit)[:100]
         normalized_steps.append({
             "step_id": step_id,
+            "unit": unit or step_id,
             "role": role,
             "verification_target": target,
             "rule_id": str(item.get("rule_id", item.get("rule", "")))[:120],
@@ -455,6 +458,7 @@ def apply_semantic_proposal(graph: dict[str, Any], proposal: dict[str, Any]) -> 
     for annotation in proposal["steps"]:
         step = by_id[annotation["step_id"]]
         step["semantic_role"] = annotation["role"]
+        step["semantic_unit"] = annotation.get("unit", step["id"])
         step["verification_target"] = annotation["verification_target"]
         step["semantic_rule_id"] = annotation["rule_id"]
         step["semantic_rationale"] = annotation["rationale"]
@@ -544,10 +548,74 @@ def apply_semantic_proposal(graph: dict[str, Any], proposal: dict[str, Any]) -> 
             graph.setdefault("dependencies", []).append(edge)
             existing_edges[key] = edge
             semantic_edge_count += 1
+    ordered_steps = sorted(by_id.values(), key=lambda item: (item["source"]["start_line"], item["source"]["end_line"], item["id"]))
+    semantic_units: list[dict[str, Any]] = []
+    current_unit: dict[str, Any] | None = None
+    for step in ordered_steps:
+        unit_title = str(step.get("semantic_unit", step["id"])).strip() or step["id"]
+        if current_unit is None or current_unit["title"] != unit_title:
+            unit_seed = f"{graph.get('content_hash', '')}:{unit_title}:{step['id']}"
+            current_unit = {
+                "id": f"semantic_unit_{sha256(unit_seed.encode('utf-8')).hexdigest()[:16]}",
+                "title": unit_title,
+                "source": {"start_line": step["source"]["start_line"], "end_line": step["source"]["end_line"]},
+                "step_ids": [],
+                "text": "",
+                "local_status": step.get("local_status", "not_checked"),
+            }
+            semantic_units.append(current_unit)
+        current_unit["step_ids"].append(step["id"])
+        current_unit["source"]["end_line"] = step["source"]["end_line"]
+        current_unit["text"] = f"{current_unit['text']}\n\n{step['text']}".strip()
+        statuses = {str(by_id[step_id].get("local_status", "not_checked")) for step_id in current_unit["step_ids"]}
+        if "locally_verified" in statuses:
+            current_unit["local_status"] = "locally_verified"
+        elif "semantically_reviewed" in statuses:
+            current_unit["local_status"] = "semantically_reviewed"
+        elif "partially_checked" in statuses:
+            current_unit["local_status"] = "partially_checked"
+        elif "inconclusive" in statuses:
+            current_unit["local_status"] = "inconclusive"
+
+    unit_by_step = {step_id: unit["id"] for unit in semantic_units for step_id in unit["step_ids"]}
+    unit_edges: dict[tuple[str, str], dict[str, Any]] = {}
+    def edge_priority(edge: dict[str, Any]) -> int:
+        if edge.get("edge_status") in {"verified", "verified_under_assumptions"}:
+            return 100
+        if edge.get("edge_status") == "semantically_reviewed":
+            return 80
+        return {"justifies": 50, "requires_assumption": 45, "uses_definition": 40, "formula_transform": 30, "substitutes_result": 20, "derives": 10}.get(edge.get("kind", ""), 0)
+
+    for edge in graph.get("dependencies", []):
+        if not (edge.get("review_visible") is True or edge.get("validator")):
+            continue
+        source_unit_id = unit_by_step.get(edge.get("from_step_id"))
+        target_unit_id = unit_by_step.get(edge.get("to_step_id"))
+        if not source_unit_id or not target_unit_id or source_unit_id == target_unit_id:
+            continue
+        key = (source_unit_id, target_unit_id)
+        projected_seed = f"{source_unit_id}:{target_unit_id}:{edge.get('kind', '')}"
+        projected = {
+            "id": f"semantic_unit_edge_{sha256(projected_seed.encode('utf-8')).hexdigest()[:16]}",
+            "from_unit_id": source_unit_id,
+            "to_unit_id": target_unit_id,
+            "kind": edge.get("kind", "derives"),
+            "edge_status": edge.get("edge_status", "not_checked"),
+            "reason": edge.get("reason", "") or "Source-bound structural relation.",
+            "semantic_proposal": bool(edge.get("semantic_proposal")),
+            "validator": edge.get("validator"),
+        }
+        existing = unit_edges.get(key)
+        if existing is None or edge_priority(projected) > edge_priority(existing):
+            unit_edges[key] = projected
+
+    graph["semantic_units"] = semantic_units
+    graph["semantic_unit_dependencies"] = list(unit_edges.values())
     graph["semantic_proposal"] = {
         "status": "proposed",
         "model": config.llm_model,
         "fragments": proposal["fragments"],
+        "unit_count": len(semantic_units),
         "edge_count": semantic_edge_count,
         "notice": "LLM structure is a source-bound proposal; only rule validators or execution evidence may establish verification.",
     }
