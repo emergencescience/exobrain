@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import secrets
 import uuid
 from datetime import datetime
 
@@ -15,7 +14,6 @@ from app.storage import (
     ExecutionArtifact,
     LLMCallLog,
     Snapshot,
-    SnapshotShare,
 )
 
 logger = logging.getLogger("exobrain.storage.postgres")
@@ -133,20 +131,20 @@ class PostgresStorage:
             created_at = created_at.isoformat()
         if isinstance(updated_at, datetime):
             updated_at = updated_at.isoformat()
-        return Document(id=id_, user_id=user_id, title=title, markdown=markdown,
+        return Document(id=id_, project_id=user_id, title=title, markdown=markdown,
                         messages=messages, created_at=created_at, updated_at=updated_at)
 
     # ── Document CRUD ────────────────────────────────────────────────
 
-    async def create_document(self, user_id: str = "local", title: str = "Untitled Paper") -> Document:
-        doc = Document(user_id=user_id, title=title)
+    async def create_document(self, project_id: str = "local", title: str = "Untitled Paper") -> Document:
+        doc = Document(project_id=project_id, title=title)
         pool = _get_pool()
         conn = pool.getconn()
         try:
             cur = conn.cursor()
             cur.execute(
                 "INSERT INTO exobrain_documents (id, user_id, title, markdown, messages) VALUES (%s,%s,%s,%s,%s)",
-                (doc.id, user_id, title, "", "[]"),
+                (doc.id, project_id, title, "", "[]"),
             )
             conn.commit()
             cur.close()
@@ -154,14 +152,14 @@ class PostgresStorage:
             pool.putconn(conn)
         return doc
 
-    async def list_documents(self, user_id: str = "local") -> list[Document]:
+    async def list_documents(self, project_id: str = "local") -> list[Document]:
         pool = _get_pool()
         conn = pool.getconn()
         try:
             cur = conn.cursor()
             cur.execute(
                 "SELECT id, user_id, title, markdown, messages, created_at, updated_at FROM exobrain_documents WHERE user_id=%s ORDER BY updated_at DESC",
-                (user_id,),
+                (project_id,),
             )
             rows = cur.fetchall()
             cur.close()
@@ -371,84 +369,6 @@ class PostgresStorage:
         finally:
             pool.putconn(conn)
         return self._row_to_doc(row)
-
-    # ── Read-only snapshot sharing ────────────────────────────────────
-
-    async def create_snapshot_share(self, snapshot_id: str) -> SnapshotShare:
-        share = SnapshotShare(token=secrets.token_urlsafe(24), snapshot_id=snapshot_id)
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO exobrain_snapshot_shares (token, snapshot_id) VALUES (%s,%s)",
-                (share.token, share.snapshot_id),
-            )
-            conn.commit()
-            cur.close()
-        finally:
-            pool.putconn(conn)
-        return share
-
-    async def get_shared_snapshot(self, token: str) -> Snapshot | None:
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT s.id, s.document_id, s.markdown, s.messages, s.content_hash,
-                       s.verification_results, s.verification_scope, s.proof_graph, s.created_at
-                FROM exobrain_snapshot_shares sh
-                JOIN exobrain_snapshots s ON s.id = sh.snapshot_id
-                WHERE sh.token=%s
-                """,
-                (token,),
-            )
-            row = cur.fetchone()
-            cur.close()
-        finally:
-            pool.putconn(conn)
-        if row is None:
-            return None
-        id_, doc_id, markdown, messages, content_hash, results, scope, graph, created_at = row
-        if isinstance(messages, str):
-            messages = json.loads(messages)
-        if isinstance(results, str):
-            results = json.loads(results)
-        if isinstance(scope, str):
-            scope = json.loads(scope)
-        if isinstance(graph, str):
-            graph = json.loads(graph)
-        if isinstance(created_at, datetime):
-            created_at = created_at.isoformat()
-        return Snapshot(
-            id=id_,
-            document_id=doc_id,
-            markdown=markdown,
-            messages=messages or [],
-            content_hash=content_hash or "",
-            verification_results=results or [],
-            verification_scope=scope or {"kind": "document"},
-            proof_graph=graph or {"schema_version": "proof-dependency-graph-v1", "fragments": [], "dependencies": []},
-            created_at=created_at,
-        )
-
-    async def revoke_snapshot_share(self, snapshot_id: str, token: str) -> bool:
-        pool = _get_pool()
-        conn = pool.getconn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "DELETE FROM exobrain_snapshot_shares WHERE token=%s AND snapshot_id=%s",
-                (token, snapshot_id),
-            )
-            deleted = cur.rowcount > 0
-            conn.commit()
-            cur.close()
-        finally:
-            pool.putconn(conn)
-        return deleted
 
     # ── Execution evidence ────────────────────────────────────────────
 

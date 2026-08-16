@@ -1,15 +1,12 @@
 """Explicit, owner-approved links between execution results and paper claims."""
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.storage import ClaimEvidenceLink, StorageProtocol, get_storage
+from app.tenant import get_project_id
 
 router = APIRouter(prefix="/api/evidence", tags=["evidence"])
-
-
-def get_user_id(x_user_id: str | None = Header(default=None)) -> str:
-    return x_user_id or "local"
 
 
 class LinkEvidenceRequest(BaseModel):
@@ -19,9 +16,9 @@ class LinkEvidenceRequest(BaseModel):
     artifact_id: str
 
 
-async def _owned_snapshot(document_id: str, snapshot_id: str, user_id: str, storage: StorageProtocol):
+async def _owned_snapshot(document_id: str, snapshot_id: str, project_id: str, storage: StorageProtocol):
     document = await storage.get_document(document_id)
-    if document is None or document.user_id != user_id:
+    if document is None or document.project_id != project_id:
         raise HTTPException(status_code=404, detail="Document not found")
     snapshot = next((item for item in await storage.list_snapshots(document_id) if item.id == snapshot_id), None)
     if snapshot is None:
@@ -32,11 +29,11 @@ async def _owned_snapshot(document_id: str, snapshot_id: str, user_id: str, stor
 @router.post("")
 async def link_execution_evidence(
     req: LinkEvidenceRequest,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
     """Link one saved execution artifact to one claim in an immutable snapshot."""
-    snapshot = await _owned_snapshot(req.document_id, req.snapshot_id, user_id, storage)
+    snapshot = await _owned_snapshot(req.document_id, req.snapshot_id, project_id, storage)
     if not any(item.get("claim_id") == req.claim_id for item in snapshot.verification_results):
         raise HTTPException(status_code=404, detail="Claim not found in verification snapshot")
     artifact = await storage.get_execution_artifact(req.artifact_id)
@@ -66,11 +63,11 @@ async def link_execution_evidence(
 async def list_evidence(
     snapshot_id: str,
     document_id: str,
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
     """List linked execution evidence for an owned verification snapshot."""
-    await _owned_snapshot(document_id, snapshot_id, user_id, storage)
+    await _owned_snapshot(document_id, snapshot_id, project_id, storage)
     links = await storage.list_claim_evidence(snapshot_id)
     response = []
     for link in links:

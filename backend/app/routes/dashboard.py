@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections import Counter
 from fastapi import APIRouter, Depends, Query
-from app.routes.documents import get_user_id
 from app.storage import StorageProtocol, get_storage
+from app.tenant import get_project_id
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -51,7 +51,7 @@ def _fragment_summary(fragment: dict) -> dict:
 async def verification_dashboard(
     q: str = Query(default="", max_length=200),
     status: str = Query(default="all", pattern="^(all|verified|mixed|needs_review|failed)$"),
-    user_id: str = Depends(get_user_id),
+    project_id: str = Depends(get_project_id),
     storage: StorageProtocol = Depends(get_storage),
 ):
     """Return search-ready snapshot summaries without duplicating document bodies.
@@ -60,7 +60,7 @@ async def verification_dashboard(
     re-runs verification, preserving the immutable-evidence boundary.
     """
     query = q.strip().lower()
-    documents = await storage.list_documents(user_id)
+    documents = await storage.list_documents(project_id)
     runs: list[dict] = []
     for document in documents:
         snapshots = await storage.list_snapshots(document.id)

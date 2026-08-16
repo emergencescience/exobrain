@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import secrets
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -14,7 +13,6 @@ from app.storage import (
     ExecutionArtifact,
     LLMCallLog,
     Snapshot,
-    SnapshotShare,
 )
 
 logger = logging.getLogger("exobrain.storage.sqlite")
@@ -37,7 +35,7 @@ class SQLiteStorage:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL DEFAULT 'local',
+                    user_id TEXT NOT NULL DEFAULT 'local', -- tenant key; value is project_id
                     title TEXT NOT NULL DEFAULT 'Untitled Paper',
                     markdown TEXT NOT NULL DEFAULT '',
                     messages TEXT NOT NULL DEFAULT '[]',
@@ -135,20 +133,20 @@ class SQLiteStorage:
         except (json.JSONDecodeError, TypeError):
             messages = []
         return Document(
-            id=id_, user_id=user_id, title=title, markdown=markdown,
+            id=id_, project_id=user_id, title=title, markdown=markdown,
             messages=messages, created_at=created_at, updated_at=updated_at,
         )
 
     # ── Document CRUD ────────────────────────────────────────────────
 
-    async def create_document(self, user_id: str = "local", title: str = "Untitled Paper") -> Document:
-        doc = Document(user_id=user_id, title=title)
+    async def create_document(self, project_id: str = "local", title: str = "Untitled Paper") -> Document:
+        doc = Document(project_id=project_id, title=title)
         now = self._now()
         with self._lock:
             conn = sqlite3.connect(self.db_path)
             conn.execute(
                 "INSERT INTO documents (id, user_id, title, markdown, messages, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (doc.id, user_id, title, "", "[]", now, now),
+                (doc.id, project_id, title, "", "[]", now, now),
             )
             conn.commit()
             conn.close()
@@ -156,12 +154,12 @@ class SQLiteStorage:
         doc.updated_at = now
         return doc
 
-    async def list_documents(self, user_id: str = "local") -> list[Document]:
+    async def list_documents(self, project_id: str = "local") -> list[Document]:
         with self._lock:
             conn = sqlite3.connect(self.db_path)
             rows = conn.execute(
                 "SELECT id, user_id, title, markdown, messages, created_at, updated_at FROM documents WHERE user_id=? ORDER BY updated_at DESC",
-                (user_id,),
+                (project_id,),
             ).fetchall()
             conn.close()
         return [self._row_to_doc(r) for r in rows]
@@ -341,69 +339,6 @@ class SQLiteStorage:
             conn.close()
 
         return self._row_to_doc(row)
-
-    # ── Read-only snapshot sharing ────────────────────────────────────
-
-    async def create_snapshot_share(self, snapshot_id: str) -> SnapshotShare:
-        share = SnapshotShare(token=secrets.token_urlsafe(24), snapshot_id=snapshot_id)
-        with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute(
-                "INSERT INTO snapshot_shares (token, snapshot_id, created_at) VALUES (?,?,?)",
-                (share.token, share.snapshot_id, share.created_at),
-            )
-            conn.commit()
-            conn.close()
-        return share
-
-    async def get_shared_snapshot(self, token: str) -> Snapshot | None:
-        with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                """
-                SELECT s.id, s.document_id, s.markdown, s.messages, s.content_hash,
-                       s.verification_results, s.verification_scope, s.proof_graph, s.created_at
-                FROM snapshot_shares sh
-                JOIN snapshots s ON s.id = sh.snapshot_id
-                WHERE sh.token=?
-                """,
-                (token,),
-            ).fetchone()
-            conn.close()
-        if row is None:
-            return None
-        id_, doc_id, markdown, messages_raw, content_hash, results_raw, scope_raw, graph_raw, created_at = row
-        try:
-            messages = json.loads(messages_raw)
-        except (json.JSONDecodeError, TypeError):
-            messages = []
-        try:
-            results = json.loads(results_raw)
-        except (json.JSONDecodeError, TypeError):
-            results = []
-        return Snapshot(
-            id=id_,
-            document_id=doc_id,
-            markdown=markdown,
-            messages=messages,
-            content_hash=content_hash or "",
-            verification_results=results,
-            verification_scope=json.loads(scope_raw) if scope_raw else {"kind": "document"},
-            proof_graph=json.loads(graph_raw) if graph_raw else {"schema_version": "proof-dependency-graph-v1", "fragments": [], "dependencies": []},
-            created_at=created_at,
-        )
-
-    async def revoke_snapshot_share(self, snapshot_id: str, token: str) -> bool:
-        with self._lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.execute(
-                "DELETE FROM snapshot_shares WHERE token=? AND snapshot_id=?",
-                (token, snapshot_id),
-            )
-            conn.commit()
-            deleted = cursor.rowcount > 0
-            conn.close()
-        return deleted
 
     # ── Execution evidence ────────────────────────────────────────────
 

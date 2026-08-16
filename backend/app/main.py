@@ -15,8 +15,8 @@ from app.routes.documents import router as documents_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.evidence import router as evidence_router
 from app.routes.verify import router as verify_router
+from app.internal_auth import InternalKeyMiddleware
 from app.routes.run import router as run_router
-from app.routes.shares import router as shares_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("exobrain")
@@ -33,7 +33,7 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS
+app.add_middleware(InternalKeyMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,
@@ -50,7 +50,6 @@ app.include_router(dashboard_router)
 app.include_router(evidence_router)
 app.include_router(verify_router)
 app.include_router(run_router)
-app.include_router(shares_router)
 
 
 # Static files — mobile web app served at /m/

@@ -1,7 +1,11 @@
 {
-  "name": "exobrain-frontend",
+  "name": "@emergencescience/exobrain-ui",
   "version": "0.1.0",
   "private": true,
+  "exports": {
+    ".": "./src/components/ExobrainClient.tsx",
+    "./prose.css": "./src/components/exobrain-prose.css"
+  },
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
