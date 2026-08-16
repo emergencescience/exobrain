@@ -14,6 +14,7 @@ backend/app/data/*.db-shm
 .env
 logs
 cache
+benchmarks
 
 # Reproducible frontend build and test outputs
 .next/
