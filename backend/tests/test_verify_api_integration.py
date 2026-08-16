@@ -290,3 +290,16 @@ $$z=r\\cos\\phi$$
     assert len(results) == 2
     assert results[0]["status"] != "not_required"
     assert results[1]["status"] == "not_required"
+
+
+
+def test_atan2_branch_convention_is_explicit():
+    from app.verify import latex_to_sympy, verify_equation
+
+    parsed, error = latex_to_sympy(r"\operatorname{atan2}(y,x)")
+    assert error is None
+    assert parsed is not None
+    result = verify_equation(r"\theta=\operatorname{atan2}(y,x)")
+    assert result.status == "inconclusive"
+    assert "(-π, π]" in result.detail
+    assert "mod 2π" in result.detail

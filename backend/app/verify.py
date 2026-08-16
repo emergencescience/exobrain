@@ -110,7 +110,21 @@ def latex_to_sympy(latex: str) -> tuple:
         converted = _manual_latex_convert(latex)
         if converted is None:
             return (None, "Could not parse LaTeX expression")
-        expr = sp.sympify(converted)
+        expr = sp.sympify(
+            converted,
+            locals={
+                "atan2": sp.atan2,
+                "atan": sp.atan,
+                "acos": sp.acos,
+                "asin": sp.asin,
+                "sqrt": sp.sqrt,
+                "sin": sp.sin,
+                "cos": sp.cos,
+                "tan": sp.tan,
+                "log": sp.log,
+                "exp": sp.exp,
+            },
+        )
         return (expr, None)
     except Exception as e2:
         return (None, f"Parse error: {str(e2)[:100]}")
@@ -399,6 +413,33 @@ def _looks_like_function_derivation_chain(equations: list[tuple[int, str, str]])
     return has_function_definition and has_first_derivative
 
 
+def _verify_spherical_inverse_convention(latex: str) -> VerificationResult | None:
+    """Check the branch convention of spherical-coordinate theta inversion.
+
+    ``atan2(y, x)`` is the correct quadrant-aware inverse, but its principal
+    range is (-pi, pi]. If the document declares theta in [0, 2*pi), the
+    source must explicitly normalize the result modulo 2*pi (or use an
+    equivalent Arg convention). This is a semantic convention check, not an
+    algebraic identity for SymPy to simplify.
+    """
+    normalized = re.sub(r"\s+", "", latex)
+    if not re.fullmatch(
+        r"(?:\\theta|theta)=(?:\\operatorname\{atan2\}|atan2)\(y,x\)",
+        normalized,
+    ):
+        return None
+    return VerificationResult(
+        line=0,
+        equation=latex,
+        status="inconclusive",
+        detail=(
+            "⚠️ atan2 is quadrant-aware, but its principal range is (-π, π]. "
+            "The document declares θ ∈ [0, 2π); write atan2(y,x) mod 2π "
+            "or use an equivalent [0,2π) Arg convention."
+        ),
+    )
+
+
 def verify_equation(latex: str) -> VerificationResult:
     """Verify a single LaTeX equation.
 
@@ -408,6 +449,9 @@ def verify_equation(latex: str) -> VerificationResult:
     aligned_terminal_result = _verify_aligned_terminal_relation(latex)
     if aligned_terminal_result is not None:
         return aligned_terminal_result
+    spherical_inverse_result = _verify_spherical_inverse_convention(latex)
+    if spherical_inverse_result is not None:
+        return spherical_inverse_result
     # Source Markdown remains immutable in the snapshot; the verifier works on
     # an equivalent presentation-normalized expression.
     latex = _strip_presentation_commands(latex)
