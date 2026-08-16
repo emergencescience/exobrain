@@ -101,7 +101,6 @@ All via environment variables:
 | `OPENAI_API_KEY` | (required for chat) | LLM API key |
 | `OPENAI_API_BASE` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `OPENAI_MODEL` | `deepseek-v4-pro` | Model name |
-| `EXOBRAIN_INTERNAL_API_KEY` | (empty) | Optional pod-to-pod key (`X-API-Key`). Not an LLM credential. OSS leave unset. |
 | `EXOBRAIN_RAG_INDEX` | (empty) | Path to pre-built RAG index JSON |
 | `EXOBRAIN_RAG_TOP_K` | `3` | Number of RAG chunks to retrieve |
 | `EXOBRAIN_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
