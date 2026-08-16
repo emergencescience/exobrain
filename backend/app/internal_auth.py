@@ -1,4 +1,8 @@
-"""Optional internal-key gate for the SaaS deployment behind Orchestrator."""
+"""Pod-to-pod gate for the SaaS deployment behind Orchestrator.
+
+Uses EXOBRAIN_INTERNAL_API_KEY (X-API-Key). This is not OPENAI_API_KEY.
+OSS docker / local leave it unset so the standalone frontend can call the engine.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ class InternalKeyMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_EXACT or path.startswith("/m"):
             return await call_next(request)
 
-        expected = os.getenv("EXOBRAIN_API_KEY", "").strip()
+        expected = os.getenv("EXOBRAIN_INTERNAL_API_KEY", "").strip()
         require = os.getenv("EXOBRAIN_REQUIRE_INTERNAL_KEY", "").strip().lower() in {
             "1",
             "true",

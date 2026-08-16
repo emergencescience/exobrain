@@ -16,7 +16,7 @@ cd backend
 # 首次执行：建立虚拟环境并安装运行/测试依赖
 uv sync --extra test
 
-# 对话需要 OpenAI 兼容模型 API key；内置示例不需要
+# 对话需要 OPENAI_API_KEY / OPENAI_API_BASE / OPENAI_MODEL；内置示例不需要
 export EXOBRAIN_CORS_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8080
 ```

@@ -25,7 +25,7 @@ def client(tmp_path, monkeypatch):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
-    monkeypatch.delenv("EXOBRAIN_API_KEY", raising=False)
+    monkeypatch.delenv("EXOBRAIN_INTERNAL_API_KEY", raising=False)
     monkeypatch.delenv("EXOBRAIN_REQUIRE_INTERNAL_KEY", raising=False)
 
 
@@ -51,7 +51,7 @@ def test_documents_are_isolated_by_project_header(client: TestClient):
 
 
 def test_internal_key_rejects_unauthenticated_writes(tmp_path, monkeypatch):
-    monkeypatch.setenv("EXOBRAIN_API_KEY", "secret-key")
+    monkeypatch.setenv("EXOBRAIN_INTERNAL_API_KEY", "secret-key")
     monkeypatch.setenv("EXOBRAIN_REQUIRE_INTERNAL_KEY", "1")
     storage = SQLiteStorage(str(tmp_path / "exobrain.db"))
     asyncio.run(storage.init())

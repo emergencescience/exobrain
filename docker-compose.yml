@@ -8,9 +8,9 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - EXOBRAIN_LLM_API_KEY=${EXOBRAIN_LLM_API_KEY:-}
-      - EXOBRAIN_LLM_BASE_URL=${EXOBRAIN_LLM_BASE_URL:-https://api.deepseek.com}
-      - EXOBRAIN_LLM_MODEL=${EXOBRAIN_LLM_MODEL:-deepseek-chat}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.deepseek.com}
+      - OPENAI_MODEL=${OPENAI_MODEL:-deepseek-chat}
       - EXOBRAIN_RAG_INDEX=/app/data/mpc_rag.json
       - EXOBRAIN_CORS_ORIGINS=${EXOBRAIN_CORS_ORIGINS:-*}
     volumes:
