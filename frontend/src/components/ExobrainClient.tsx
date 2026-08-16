@@ -958,6 +958,7 @@ export default function ExobrainClient({
                 <LabelDocument
                   markdown={markdown}
                   results={verifyResults}
+                  proofGraph={verificationSnapshot?.proof_graph}
                   stale={stale}
                   copy={copy}
                   markdownPlugins={markdownPlugins}
@@ -1072,20 +1073,41 @@ function aggregateLabelStatus(results: VerifyResult[]): VerificationStatus {
   if (!obligationResults.length) return "not_required";
   if (obligationResults.some((result) => result.status === "failed" || result.status === "error")) return "failed";
   if (obligationResults.every((result) => result.status === "verified")) return "verified";
-  if (results.some((result) => result.status === "verified" || result.status === "partially_checked")) return "partially_checked";
+  if (obligationResults.some((result) => result.status === "verified" || result.status === "partially_checked")) return "partially_checked";
   return "inconclusive";
 }
-function labelSegments(markdown: string, results: VerifyResult[]): LabelSegment[] {
+function labelSegments(markdown: string, results: VerifyResult[], proofGraph?: ProofGraph): LabelSegment[] {
   const lines = markdown.split("\n");
+  const semanticRanges = (proofGraph?.semantic_units || [])
+    .map((unit) => {
+      let startLine = unit.source.start_line;
+      while (startLine <= unit.source.end_line && startLine <= lines.length) {
+        const trimmed = lines[startLine - 1].trim();
+        if (trimmed && !trimmed.startsWith("#")) break;
+        startLine += 1;
+      }
+      return { startLine, endLine: unit.source.end_line };
+    })
+    .filter((range) => range.startLine >= 1 && range.startLine <= lines.length && range.endLine >= range.startLine);
   const grouped = new Map<string, { startLine: number; endLine: number; results: VerifyResult[] }>();
-  for (const result of [...results]
+  if (semanticRanges.length) {
+    for (const range of semanticRanges) {
+      const overlapping = results.filter((result) => result.line <= range.endLine && (result.end_line || result.line) >= range.startLine);
+      const key = `${range.startLine}-${range.endLine}`;
+      const existing = grouped.get(key);
+      if (existing) existing.results.push(...overlapping);
+      else grouped.set(key, { ...range, results: overlapping });
+    }
+  } else {
+    for (const result of [...results]
     .filter((item) => item.line >= 1 && item.line <= lines.length)
     .sort((left, right) => left.line - right.line || left.end_line - right.end_line)) {
     const sourceRange = expandToMarkdownBlock(lines, result.line, Math.max(result.line, result.end_line || result.line));
     const key = `${sourceRange.startLine}-${sourceRange.endLine}`;
     const existing = grouped.get(key);
-    if (existing) existing.results.push(result);
-    else grouped.set(key, { ...sourceRange, results: [result] });
+      if (existing) existing.results.push(result);
+      else grouped.set(key, { ...sourceRange, results: [result] });
+    }
   }
   const groupedRanges = [...grouped.values()].sort((left, right) => left.startLine - right.startLine || left.endLine - right.endLine);
   const segments: LabelSegment[] = [];
@@ -1107,6 +1129,7 @@ function labelSegments(markdown: string, results: VerifyResult[]): LabelSegment[
 function LabelDocument({
   markdown,
   results,
+  proofGraph,
   stale,
   copy,
   markdownPlugins,
@@ -1116,6 +1139,7 @@ function LabelDocument({
 }: {
   markdown: string;
   results: VerifyResult[];
+  proofGraph?: ProofGraph;
   stale: boolean;
   copy: Copy;
   markdownPlugins: typeof remarkMath[];
@@ -1124,7 +1148,7 @@ function LabelDocument({
   onFocused: () => void;
 }) {
   const [openClaimId, setOpenClaimId] = useState<string | null>(null);
-  const segments = useMemo(() => labelSegments(markdown, results), [markdown, results]);
+  const segments = useMemo(() => labelSegments(markdown, results, proofGraph), [markdown, results, proofGraph]);
 
   useEffect(() => {
     if (focusLine === null) return;
